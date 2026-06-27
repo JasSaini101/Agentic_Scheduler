@@ -15,6 +15,8 @@ from scheduler.models import ScheduleEntry
 from scheduler.data.mock_week import DAYS, HARD_EVENTS
 import scheduler.agents.hard_block_agent as hard_block_agent
 import scheduler.agents.gym_agent as gym_agent
+import scheduler.agents.sport_agent as sport_agent
+import scheduler.agents.fill_agent as fill_agent
 
 
 def _build_blocked_ranges(entries: list[ScheduleEntry]) -> list[dict]:
@@ -71,11 +73,15 @@ def run() -> list[ScheduleEntry]:
     gym_entries = gym_agent.run({"blocked": _build_blocked_ranges(all_entries)})
     all_entries.extend(gym_entries)
 
-    # ── Step 3: Sport agent (stub — coming next) ──────────────────────────────
-    print("\n[orchestrator] sport_agent → not yet implemented, skipping.")
+    # ── Step 3: Sport agent (avoids hard blocks + gym) ───────────────────────
+    print("\n[orchestrator] Running sport_agent...")
+    sport_entries = sport_agent.run({"blocked": _build_blocked_ranges(all_entries)})
+    all_entries.extend(sport_entries)
 
-    # ── Step 4: Fill agent (stub — comes last) ────────────────────────────────
-    print("\n[orchestrator] fill_agent → not yet implemented, skipping.")
+    # ── Step 4: Fill agent (fills remaining gaps last) ────────────────────────
+    print("\n[orchestrator] Running fill_agent...")
+    fill_entries = fill_agent.run({"blocked": _build_blocked_ranges(all_entries)})
+    all_entries.extend(fill_entries)
 
     # ── Print final schedule ──────────────────────────────────────────────────
     _print_schedule(all_entries)

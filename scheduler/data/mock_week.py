@@ -97,3 +97,14 @@ GYM_CANDIDATE_HOURS = [6, 7, 17, 18]
 # ── Candidate outdoor sport slots ────────────────────────────────────────────
 # Hours we'd ever play tennis or basketball outdoors
 SPORT_CANDIDATE_HOURS = [8, 9, 10, 16, 17]
+
+# ── Fill activities (priority-ordered) ───────────────────────────────────────
+# Placed by fill_agent into remaining gaps after all other agents run.
+# duration: hours | padding: buffer to leave after the activity | reason: display hint
+FILL_ACTIVITIES = [
+    {"label": "Meal prep",         "duration": 1.5, "padding": 0.5, "reason": "Weekly batch cook"},
+    {"label": "Reading",           "duration": 1.0, "padding": 0.0, "reason": "30-day reading goal"},
+    {"label": "Grocery run",       "duration": 1.0, "padding": 0.5, "reason": "Restock for the week"},
+    {"label": "Walk / light jog",  "duration": 1.0, "padding": 0.0, "reason": "Active recovery"},
+    {"label": "Personal admin",    "duration": 1.0, "padding": 0.0, "reason": "Emails, errands, finances"},
+]
