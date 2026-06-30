@@ -121,7 +121,12 @@ def run(week_context: dict) -> list[ScheduleEntry]:
     slots.sort(key=lambda s: s.score, reverse=True)
 
     entries = []
-    for slot in slots[:TOP_N]:
+    seen_days: set[str] = set()
+    for slot in slots:
+        if len(entries) >= TOP_N:
+            break
+        if slot.day in seen_days:
+            continue
         entry = ScheduleEntry(
             day=slot.day,
             start_hour=slot.start_hour,
@@ -135,5 +140,6 @@ def run(week_context: dict) -> list[ScheduleEntry]:
         for r in slot.reasons:
             print(f"              → {r}")
         entries.append(entry)
+        seen_days.add(slot.day)
 
     return entries
