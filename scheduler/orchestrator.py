@@ -12,7 +12,8 @@ Then merges all outputs into a single weekly schedule and prints it.
 
 from collections import defaultdict
 from scheduler.models import ScheduleEntry
-from scheduler.data.mock_week import DAYS, HARD_EVENTS
+from scheduler.data.mock_week import DAYS
+from scheduler.week_context import build_week_context
 import scheduler.agents.hard_block_agent as hard_block_agent
 import scheduler.agents.gym_agent as gym_agent
 import scheduler.agents.sport_agent as sport_agent
@@ -63,24 +64,26 @@ def _print_schedule(schedule: list[ScheduleEntry]) -> None:
 def run() -> list[ScheduleEntry]:
     all_entries: list[ScheduleEntry] = []
 
+    week_context = build_week_context()
+
     # ── Step 1: Hard blocks ───────────────────────────────────────────────────
     print("\n[orchestrator] Running hard_block_agent...")
-    hard_entries = hard_block_agent.run({"hard_events": HARD_EVENTS})
+    hard_entries = hard_block_agent.run(week_context)
     all_entries.extend(hard_entries)
 
     # ── Step 2: Gym agent (aware of hard blocks) ──────────────────────────────
     print("\n[orchestrator] Running gym_agent...")
-    gym_entries = gym_agent.run({"blocked": _build_blocked_ranges(all_entries)})
+    gym_entries = gym_agent.run({**week_context, "blocked": _build_blocked_ranges(all_entries)})
     all_entries.extend(gym_entries)
 
     # ── Step 3: Sport agent (avoids hard blocks + gym) ───────────────────────
     print("\n[orchestrator] Running sport_agent...")
-    sport_entries = sport_agent.run({"blocked": _build_blocked_ranges(all_entries)})
+    sport_entries = sport_agent.run({**week_context, "blocked": _build_blocked_ranges(all_entries)})
     all_entries.extend(sport_entries)
 
     # ── Step 4: Fill agent (fills remaining gaps last) ────────────────────────
     print("\n[orchestrator] Running fill_agent...")
-    fill_entries = fill_agent.run({"blocked": _build_blocked_ranges(all_entries)})
+    fill_entries = fill_agent.run({**week_context, "blocked": _build_blocked_ranges(all_entries)})
     all_entries.extend(fill_entries)
 
     # ── Print final schedule ──────────────────────────────────────────────────

@@ -1,16 +1,16 @@
 """
 Agent 2: Gym Agent
 ──────────────────
-Scores every candidate gym slot across the week on two metrics,
+Scores every candidate gym slot across the week on three metrics,
 then returns the top 3 non-conflicting slots.
 
 Scoring breakdown (all normalized 0→1):
-  - busyness_score     : 1.0 = empty gym, 0.0 = packed           weight: 0.45
-  - time_available     : 1.0 = 2.5+ free hours after gym,        weight: 0.55
+  - busyness_score     : 1.0 = empty gym, 0.0 = packed           weight: 0.35
+  - time_available     : 1.0 = 2.5+ free hours after gym,        weight: 0.45
                          0.0 = less than 1h (slot rejected)
+  - rest_score         : sleep score mapped from 1–10 scale       weight: 0.20
 
-Deferred factors (add when data sources are ready):
-  - rest_score         : sleep score from Oura / Garmin / manual input
+Deferred factors:
   - weather_score      : storm/heat penalty for commute
 
 Future upgrades:
@@ -21,6 +21,7 @@ from scheduler.models import TimeSlot, ScheduleEntry
 from scheduler.data.mock_week import (
     GYM_BUSYNESS,
     GYM_CANDIDATE_HOURS,
+    SLEEP_SCORES,
     DAYS,
 )
 
@@ -28,13 +29,22 @@ GYM_DURATION = 1.5   # hours
 TOP_N = 3
 
 WEIGHTS = {
-    "busyness":       0.45,
-    "time_available": 0.55,
+    "busyness":       0.35,
+    "time_available": 0.45,
+    "rest":           0.20,
 }
 
 # Free-time thresholds (hours of buffer after gym ends)
 MIN_BUFFER   = 1.0   # below this → slot is rejected outright
 IDEAL_BUFFER = 2.5   # at or above this → full score of 1.0
+
+
+def _rest_score(day: str, sleep_scores: dict) -> tuple[float, str]:
+    """Normalize a 1–10 sleep score to 0→1. Missing data defaults to 0.5."""
+    raw = sleep_scores.get(day, 5)
+    score = round((raw - 1) / 9, 3)
+    level = "well-rested" if raw >= 7 else "moderate rest" if raw >= 5 else "fatigued"
+    return score, f"Sleep score: {raw}/10 ({level})"
 
 
 def _busyness_score(day: str, hour: int) -> tuple[float, str]:
@@ -87,8 +97,10 @@ def run(week_context: dict) -> list[ScheduleEntry]:
     """
     Score all candidate slots, filter blocked/tight ones, return top TOP_N.
     week_context["blocked"] is a list of already-locked hour ranges.
+    week_context["sleep_scores"] is an optional {day: int} map (1–10 scale).
     """
     blocked = week_context.get("blocked", [])
+    sleep_scores = week_context.get("sleep_scores", SLEEP_SCORES)
     slots: list[TimeSlot] = []
 
     for day in DAYS:
@@ -98,6 +110,7 @@ def run(week_context: dict) -> list[ScheduleEntry]:
 
             b_score, b_reason = _busyness_score(day, hour)
             t_score, t_reason = _time_available_score(day, hour, blocked)
+            r_score, r_reason = _rest_score(day, sleep_scores)
 
             if t_score < 0:
                 print(f"  [gym_agent] Skipped {day} {hour}:00 → {t_reason}")
@@ -106,6 +119,7 @@ def run(week_context: dict) -> list[ScheduleEntry]:
             total = (
                 WEIGHTS["busyness"]       * b_score
                 + WEIGHTS["time_available"] * t_score
+                + WEIGHTS["rest"]           * r_score
             )
 
             slot = TimeSlot(
@@ -114,7 +128,7 @@ def run(week_context: dict) -> list[ScheduleEntry]:
                 duration_hours=GYM_DURATION,
                 activity="Gym session",
                 score=round(total, 3),
-                reasons=[b_reason, t_reason],
+                reasons=[b_reason, t_reason, r_reason],
             )
             slots.append(slot)
 
