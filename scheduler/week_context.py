@@ -4,8 +4,6 @@ Week Context Builder
 Single entry point that assembles the full context dict for the orchestrator.
 Each data source is attempted live first; on any failure it falls back to mock
 data and prints a warning so the scheduler always runs.
-
-GYM_BUSYNESS has no public API — mock data is always used for that key.
 """
 
 import warnings
@@ -22,10 +20,10 @@ from scheduler.data.mock_week import (
 
 def build_week_context() -> dict:
     context = {
-        "hard_events": _load_hard_events(),
-        "weather":     _load_weather(),
+        "hard_events":  _load_hard_events(),
+        "weather":      _load_weather(),
         "sleep_scores": _load_sleep_scores(),
-        "gym_busyness": GYM_BUSYNESS,   # no public API; always mock
+        "gym_busyness": _load_gym_busyness(),
     }
     return context
 
@@ -61,3 +59,14 @@ def _load_sleep_scores() -> dict:
     except BaseException as exc:
         warnings.warn(f"[week_context] Oura Ring unavailable ({exc}); using mock sleep scores")
         return SLEEP_SCORES
+
+
+def _load_gym_busyness() -> dict:
+    try:
+        from scheduler.data.providers.gym_busyness_provider import fetch_gym_busyness
+        busyness = fetch_gym_busyness()
+        print("[week_context] Google Popular Times: loaded live gym busyness")
+        return busyness
+    except BaseException as exc:
+        warnings.warn(f"[week_context] Google Popular Times unavailable ({exc}); using mock gym busyness")
+        return GYM_BUSYNESS
