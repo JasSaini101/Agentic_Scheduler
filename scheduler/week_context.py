@@ -9,6 +9,8 @@ GYM_BUSYNESS has no public API — mock data is always used for that key.
 """
 
 import warnings
+from dotenv import load_dotenv
+load_dotenv()
 
 from scheduler.data.mock_week import (
     HARD_EVENTS,
@@ -34,7 +36,7 @@ def _load_hard_events() -> list[dict]:
         events = fetch_hard_events()
         print("[week_context] Google Calendar: loaded live hard events")
         return events
-    except Exception as exc:
+    except BaseException as exc:
         warnings.warn(f"[week_context] Google Calendar unavailable ({exc}); using mock hard events")
         return HARD_EVENTS
 
@@ -45,7 +47,7 @@ def _load_weather() -> dict:
         weather = fetch_weather()
         print("[week_context] OpenWeatherMap: loaded live weather")
         return weather
-    except Exception as exc:
+    except BaseException as exc:
         warnings.warn(f"[week_context] OpenWeatherMap unavailable ({exc}); using mock weather")
         return WEATHER
 
@@ -56,6 +58,6 @@ def _load_sleep_scores() -> dict:
         scores = fetch_sleep_scores()
         print("[week_context] Oura Ring: loaded live sleep scores")
         return scores
-    except Exception as exc:
+    except BaseException as exc:
         warnings.warn(f"[week_context] Oura Ring unavailable ({exc}); using mock sleep scores")
         return SLEEP_SCORES
