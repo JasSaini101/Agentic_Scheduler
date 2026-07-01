@@ -7,11 +7,15 @@ Each piece maps to a future data source:
   - hard_events   → Google Calendar API
 """
 
-from datetime import date, time
+from datetime import date, time, timedelta
 
 # ── Week definition ───────────────────────────────────────────────────────────
-# Start date for the schedule (Monday)
-WEEK_START = date(2026, 6, 29)
+# Start date for the schedule — always the Monday of the current week
+def _this_monday() -> date:
+    today = date.today()
+    return today - timedelta(days=today.weekday())
+
+WEEK_START = _this_monday()
 
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
