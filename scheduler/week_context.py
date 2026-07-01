@@ -9,6 +9,8 @@ GYM_BUSYNESS has no public API — mock data is always used for that key.
 """
 
 import warnings
+from dotenv import load_dotenv
+load_dotenv()
 
 from scheduler.data.mock_week import (
     HARD_EVENTS,
