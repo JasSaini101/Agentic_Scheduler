@@ -47,13 +47,26 @@ def _free_gaps(day: str, blocked: list[dict]) -> list[tuple[float, float]]:
     return [(s, e) for s, e in gaps if e - s >= MIN_GAP_HOURS]
 
 
-def run(week_context: dict) -> list[ScheduleEntry]:
+def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
     """
     Place fill activities into the first available gap that fits each one.
     week_context["blocked"] is the cumulative blocked-ranges list.
     """
     blocked = week_context.get("blocked", [])
-    activities = list(FILL_ACTIVITIES)   # copy so we can pop placed ones
+
+    if user_config is not None:
+        fill_targets = user_config.by_category("fill")
+        if fill_targets:
+            # Convert ActivityTarget list to the same format as FILL_ACTIVITIES
+            activities = [
+                {"label": t.name.title(), "duration": t.duration_hours, "padding": 0.5, "reason": f"Goal: {t.sessions_per_week}x per week"}
+                for t in fill_targets
+            ]
+        else:
+            activities = list(FILL_ACTIVITIES)
+    else:
+        activities = list(FILL_ACTIVITIES)
+
     entries: list[ScheduleEntry] = []
     placed_labels: set[str] = set()
 

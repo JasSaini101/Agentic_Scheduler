@@ -25,8 +25,8 @@ from scheduler.data.mock_week import (
     DAYS,
 )
 
-GYM_DURATION = 1.5   # hours
-TOP_N = 3
+_DEFAULT_GYM_DURATION = 1.5
+_DEFAULT_TOP_N = 3
 
 WEIGHTS = {
     "busyness":       0.35,
@@ -55,13 +55,13 @@ def _busyness_score(day: str, hour: int) -> tuple[float, str]:
     return score, f"Gym is {level} ({int(busyness * 100)}% capacity)"
 
 
-def _time_available_score(day: str, hour: int, blocked_ranges: list[dict]) -> tuple[float, str]:
+def _time_available_score(day: str, hour: int, blocked_ranges: list[dict], duration: float = _DEFAULT_GYM_DURATION) -> tuple[float, str]:
     """
     Score based on free time between gym-end and the next blocked event.
     Returns (score, reason). Returns (-1, reason) if buffer is below minimum
     so the caller can reject the slot entirely.
     """
-    gym_end = hour + GYM_DURATION
+    gym_end = hour + duration
 
     # Find the soonest event on this day that starts at or after gym_end
     next_start = None
@@ -83,9 +83,9 @@ def _time_available_score(day: str, hour: int, blocked_ranges: list[dict]) -> tu
     return round(score, 3), f"{buffer:.1f}h free after gym before next event"
 
 
-def _is_blocked(day: str, hour: int, blocked_ranges: list[dict]) -> bool:
+def _is_blocked(day: str, hour: int, blocked_ranges: list[dict], duration: float = _DEFAULT_GYM_DURATION) -> bool:
     """Check if this slot overlaps any already-locked event."""
-    end = hour + GYM_DURATION
+    end = hour + duration
     for block in blocked_ranges:
         if block["day"] == day:
             if not (end <= block["start_hour"] or hour >= block["end_hour"]):
@@ -93,23 +93,34 @@ def _is_blocked(day: str, hour: int, blocked_ranges: list[dict]) -> bool:
     return False
 
 
-def run(week_context: dict) -> list[ScheduleEntry]:
+def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
     """
-    Score all candidate slots, filter blocked/tight ones, return top TOP_N.
+    Score all candidate slots, filter blocked/tight ones, return top N.
     week_context["blocked"] is a list of already-locked hour ranges.
     week_context["sleep_scores"] is an optional {day: int} map (1–10 scale).
     """
     blocked = week_context.get("blocked", [])
     sleep_scores = week_context.get("sleep_scores", SLEEP_SCORES)
+
+    if user_config is not None:
+        gym_targets = user_config.by_category("gym")
+        gym_target = gym_targets[0] if gym_targets else None
+    else:
+        gym_target = None
+
+    gym_duration = gym_target.duration_hours if gym_target else _DEFAULT_GYM_DURATION
+    top_n = gym_target.sessions_per_week if gym_target else _DEFAULT_TOP_N
+    candidate_hours = gym_target.candidate_hours if gym_target else GYM_CANDIDATE_HOURS
+
     slots: list[TimeSlot] = []
 
     for day in DAYS:
-        for hour in GYM_CANDIDATE_HOURS:
-            if _is_blocked(day, hour, blocked):
+        for hour in candidate_hours:
+            if _is_blocked(day, hour, blocked, gym_duration):
                 continue
 
             b_score, b_reason = _busyness_score(day, hour)
-            t_score, t_reason = _time_available_score(day, hour, blocked)
+            t_score, t_reason = _time_available_score(day, hour, blocked, gym_duration)
             r_score, r_reason = _rest_score(day, sleep_scores)
 
             if t_score < 0:
@@ -125,7 +136,7 @@ def run(week_context: dict) -> list[ScheduleEntry]:
             slot = TimeSlot(
                 day=day,
                 start_hour=hour,
-                duration_hours=GYM_DURATION,
+                duration_hours=gym_duration,
                 activity="Gym session",
                 score=round(total, 3),
                 reasons=[b_reason, t_reason, r_reason],
@@ -137,7 +148,7 @@ def run(week_context: dict) -> list[ScheduleEntry]:
     entries = []
     seen_days: set[str] = set()
     for slot in slots:
-        if len(entries) >= TOP_N:
+        if len(entries) >= top_n:
             break
         if slot.day in seen_days:
             continue
