@@ -4,6 +4,8 @@ Week Context Builder
 Single entry point that assembles the full context dict for the orchestrator.
 Each data source is attempted live first; on any failure it falls back to mock
 data and prints a warning so the scheduler always runs.
+
+Sleep scores and gym busyness always use mock data (no live API).
 """
 
 import warnings
@@ -22,8 +24,8 @@ def build_week_context() -> dict:
     context = {
         "hard_events":  _load_hard_events(),
         "weather":      _load_weather(),
-        "sleep_scores": _load_sleep_scores(),
-        "gym_busyness": _load_gym_busyness(),
+        "sleep_scores": SLEEP_SCORES,   # mock only — no live API
+        "gym_busyness": GYM_BUSYNESS,   # mock only — Popular Times unavailable for this location
     }
     return context
 
@@ -48,25 +50,3 @@ def _load_weather() -> dict:
     except BaseException as exc:
         warnings.warn(f"[week_context] OpenWeatherMap unavailable ({exc}); using mock weather")
         return WEATHER
-
-
-def _load_sleep_scores() -> dict:
-    try:
-        from scheduler.data.providers.sleep_provider import fetch_sleep_scores
-        scores = fetch_sleep_scores()
-        print("[week_context] Oura Ring: loaded live sleep scores")
-        return scores
-    except BaseException as exc:
-        warnings.warn(f"[week_context] Oura Ring unavailable ({exc}); using mock sleep scores")
-        return SLEEP_SCORES
-
-
-def _load_gym_busyness() -> dict:
-    try:
-        from scheduler.data.providers.gym_busyness_provider import fetch_gym_busyness
-        busyness = fetch_gym_busyness()
-        print("[week_context] Google Popular Times: loaded live gym busyness")
-        return busyness
-    except BaseException as exc:
-        warnings.warn(f"[week_context] Google Popular Times unavailable ({exc}); using mock gym busyness")
-        return GYM_BUSYNESS
