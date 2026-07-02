@@ -3,3 +3,4 @@ google-auth-oauthlib
 requests
 python-dotenv
 anthropic
+populartimes @ git+https://github.com/m-wrzr/populartimes.git
