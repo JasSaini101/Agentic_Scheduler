@@ -1,17 +1,15 @@
-from dataclasses import dataclass, field
+from pydantic import BaseModel
 
 
-@dataclass
-class ActivityTarget:
+class ActivityTarget(BaseModel):
     name: str
     sessions_per_week: int
     duration_hours: float
-    candidate_hours: list[int]
+    candidate_hours: list[int] = []
     category: str   # "gym" | "sport" | "fill"
 
 
-@dataclass
-class UserConfig:
+class UserConfig(BaseModel):
     activities: list[ActivityTarget]
     fill_window: tuple[int, int] = (8, 22)
     calendar_id: str = "primary"
