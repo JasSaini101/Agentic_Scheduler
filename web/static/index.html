@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agentic Scheduler</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --border:   #2a2d3e;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --accent:   #6366f1;
+    --accent-h: #818cf8;
+
+    --c-gym:        #3b82f6;
+    --c-sport:      #22c55e;
+    --c-fill:       #f59e0b;
+    --c-hard-block: #6b7280;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── Top bar ── */
+  header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 8px;
+    flex: 1;
+    min-width: 260px;
+  }
+
+  input[type="text"] {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  button:hover { background: var(--accent-h); }
+  button:disabled { background: var(--muted); cursor: not-allowed; }
+
+  /* ── Adjust bar ── */
+  #adjust-bar {
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    display: none;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  #adjust-bar.visible { display: flex; }
+  #adjust-bar span { color: var(--muted); white-space: nowrap; }
+
+  /* ── Status / error ── */
+  #status {
+    padding: 10px 24px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 36px;
+  }
+  #status.error { color: #f87171; }
+
+  /* ── Calendar grid ── */
+  #calendar {
+    padding: 0 24px 40px;
+    overflow-x: auto;
+  }
+
+  .cal-grid {
+    display: grid;
+    grid-template-columns: 48px repeat(7, 1fr);
+    min-width: 640px;
+  }
+
+  /* Day headers */
+  .day-header {
+    padding: 8px 4px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+  .day-header.corner { /* time column label */ }
+
+  /* Time rows */
+  .time-col {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    padding-right: 8px;
+    /* positioned by JS */
+  }
+
+  /* Day columns — each is a relative container */
+  .day-col {
+    border-left: 1px solid var(--border);
+    position: relative;
+  }
+
+  /* Hour guide lines */
+  .hour-line {
+    position: absolute;
+    left: 0; right: 0;
+    border-top: 1px solid var(--border);
+    pointer-events: none;
+  }
+
+  /* Event blocks */
+  .event-block {
+    position: absolute;
+    left: 3px; right: 3px;
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.3;
+    overflow: hidden;
+    cursor: default;
+    transition: filter 0.1s;
+  }
+  .event-block:hover { filter: brightness(1.15); }
+
+  .event-block.gym        { background: var(--c-gym);        color: #fff; }
+  .event-block.sport      { background: var(--c-sport);      color: #052e16; }
+  .event-block.fill       { background: var(--c-fill);       color: #1c1917; }
+  .event-block.hard_block { background: var(--c-hard-block); color: #f1f5f9; }
+
+  /* Tooltip */
+  .tooltip {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    background: #1e2130;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    max-width: 220px;
+    font-size: 12px;
+    line-height: 1.5;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  .tooltip .tt-label { font-weight: 600; margin-bottom: 4px; }
+  .tooltip .tt-time  { color: var(--muted); font-size: 11px; }
+  .tooltip .tt-cat   { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .tooltip .tt-reasons { color: #94a3b8; margin-top: 4px; }
+
+  /* Legend */
+  #legend {
+    display: none;
+    padding: 8px 24px 0;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  #legend.visible { display: flex; }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Agentic Scheduler</h1>
+  <div class="input-row">
+    <input id="goals-input" type="text"
+           placeholder="e.g. gym 3x, tennis twice, 40h work, basketball once" />
+    <button id="build-btn">Build Schedule</button>
+  </div>
+</header>
+
+<div id="adjust-bar">
+  <span>Make a change:</span>
+  <div class="input-row">
+    <input id="adjust-input" type="text"
+           placeholder="e.g. move gym on Monday to Saturday" />
+    <button id="adjust-btn">Apply</button>
+  </div>
+</div>
+
+<div id="status">Enter your weekly goals above to get started.</div>
+
+<div id="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--c-gym)"></div>Gym</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--c-sport)"></div>Sport</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--c-fill)"></div>Fill</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--c-hard-block)"></div>Hard Block</div>
+</div>
+
+<div id="calendar"></div>
+
+<div class="tooltip" id="tooltip">
+  <div class="tt-label" id="tt-label"></div>
+  <div class="tt-time"  id="tt-time"></div>
+  <div class="tt-cat"   id="tt-cat"></div>
+  <div class="tt-reasons" id="tt-reasons"></div>
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────
+const DAYS   = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+const DAY_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const HOUR_START = 6;
+const HOUR_END   = 22;
+const HOURS      = HOUR_END - HOUR_START; // 16
+const PX_PER_HR  = 56;
+
+// ── State ─────────────────────────────────────────────────────────────────
+let sessionId = null;
+
+// ── DOM refs ──────────────────────────────────────────────────────────────
+const goalsInput  = document.getElementById("goals-input");
+const buildBtn    = document.getElementById("build-btn");
+const adjustBar   = document.getElementById("adjust-bar");
+const adjustInput = document.getElementById("adjust-input");
+const adjustBtn   = document.getElementById("adjust-btn");
+const statusEl    = document.getElementById("status");
+const calEl       = document.getElementById("calendar");
+const legend      = document.getElementById("legend");
+const tooltip     = document.getElementById("tooltip");
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function setStatus(msg, isError = false) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? "error" : "";
+}
+
+function fmt(h) {
+  const hr = Math.floor(h);
+  const mn = Math.round((h - hr) * 60);
+  const suffix = hr < 12 ? "am" : "pm";
+  const disp = ((hr - 1) % 12) + 1;
+  return mn === 0 ? `${disp}${suffix}` : `${disp}:${mn.toString().padStart(2,"0")}${suffix}`;
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────
+function showTooltip(entry, el) {
+  document.getElementById("tt-label").textContent = entry.label;
+  document.getElementById("tt-time").textContent =
+    `${entry.day}  ${fmt(entry.start_hour)} – ${fmt(entry.end_hour)}`;
+  document.getElementById("tt-cat").textContent = entry.category.replace("_"," ");
+  const reasons = (entry.reasons || []).filter(Boolean);
+  document.getElementById("tt-reasons").textContent = reasons.join(" · ");
+
+  el.addEventListener("mousemove", onMove);
+  el.addEventListener("mouseleave", hideTooltip);
+  tooltip.style.display = "block";
+}
+
+function onMove(e) {
+  tooltip.style.left = (e.clientX + 12) + "px";
+  tooltip.style.top  = (e.clientY + 12) + "px";
+}
+
+function hideTooltip(e) {
+  tooltip.style.display = "none";
+  e.currentTarget.removeEventListener("mousemove", onMove);
+  e.currentTarget.removeEventListener("mouseleave", hideTooltip);
+}
+
+// ── Render calendar ───────────────────────────────────────────────────────
+function renderCalendar(schedule) {
+  calEl.innerHTML = "";
+  legend.classList.add("visible");
+
+  const totalHeight = HOURS * PX_PER_HR;
+  const grid = document.createElement("div");
+  grid.className = "cal-grid";
+
+  // Header row
+  const corner = document.createElement("div");
+  corner.className = "day-header corner";
+  grid.appendChild(corner);
+
+  DAYS.forEach((d, i) => {
+    const h = document.createElement("div");
+    h.className = "day-header";
+    h.textContent = DAY_SHORT[i];
+    grid.appendChild(h);
+  });
+
+  // Time labels column (overlay approach)
+  const timeCol = document.createElement("div");
+  timeCol.style.cssText = `position:relative; height:${totalHeight}px;`;
+  for (let hr = HOUR_START; hr <= HOUR_END; hr++) {
+    const lbl = document.createElement("div");
+    lbl.className = "time-col";
+    lbl.style.cssText = `position:absolute; top:${(hr-HOUR_START)*PX_PER_HR - 7}px; width:40px; right:8px;`;
+    if (hr < HOUR_END) lbl.textContent = fmt(hr);
+    timeCol.appendChild(lbl);
+  }
+  grid.appendChild(timeCol);
+
+  // Day columns
+  DAYS.forEach(day => {
+    const col = document.createElement("div");
+    col.className = "day-col";
+    col.style.height = totalHeight + "px";
+
+    // Hour lines
+    for (let hr = HOUR_START; hr <= HOUR_END; hr++) {
+      const line = document.createElement("div");
+      line.className = "hour-line";
+      line.style.top = ((hr - HOUR_START) * PX_PER_HR) + "px";
+      col.appendChild(line);
+    }
+
+    // Events for this day
+    const dayEntries = schedule.filter(e => e.day === day);
+    dayEntries.forEach(entry => {
+      const top    = (entry.start_hour - HOUR_START) * PX_PER_HR;
+      const height = Math.max((entry.end_hour - entry.start_hour) * PX_PER_HR - 2, 18);
+
+      const block = document.createElement("div");
+      block.className = `event-block ${entry.category}`;
+      block.style.cssText = `top:${top}px; height:${height}px;`;
+
+      const dur = (entry.end_hour - entry.start_hour).toFixed(1);
+      block.innerHTML = `<div>${entry.label}</div><div style="opacity:.7;font-size:10px">${dur}h</div>`;
+
+      block.addEventListener("mouseenter", () => showTooltip(entry, block));
+      col.appendChild(block);
+    });
+
+    grid.appendChild(col);
+  });
+
+  calEl.appendChild(grid);
+}
+
+// ── API calls ─────────────────────────────────────────────────────────────
+async function buildSchedule() {
+  const goals = goalsInput.value.trim();
+  if (!goals) { setStatus("Please enter your goals.", true); return; }
+
+  buildBtn.disabled = true;
+  setStatus("Building your schedule… (this may take 10–20 seconds)");
+
+  try {
+    const res = await fetch("/api/schedule", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goals }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Unknown error");
+
+    sessionId = data.session_id;
+    renderCalendar(data.schedule);
+    adjustBar.classList.add("visible");
+    setStatus(`Schedule built — ${data.schedule.length} events across the week.`);
+  } catch (err) {
+    setStatus("Error: " + err.message, true);
+  } finally {
+    buildBtn.disabled = false;
+  }
+}
+
+async function applyAdjustment() {
+  if (!sessionId) return;
+  const change = adjustInput.value.trim();
+  if (!change) return;
+
+  adjustBtn.disabled = true;
+  setStatus("Applying adjustment…");
+
+  try {
+    const res = await fetch("/api/adjust", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, change }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Unknown error");
+
+    renderCalendar(data.schedule);
+    adjustInput.value = "";
+    setStatus(`Adjustment applied — ${data.schedule.length} events across the week.`);
+  } catch (err) {
+    setStatus("Error: " + err.message, true);
+  } finally {
+    adjustBtn.disabled = false;
+  }
+}
+
+// ── Events ────────────────────────────────────────────────────────────────
+buildBtn.addEventListener("click", buildSchedule);
+goalsInput.addEventListener("keydown", e => { if (e.key === "Enter") buildSchedule(); });
+
+adjustBtn.addEventListener("click", applyAdjustment);
+adjustInput.addEventListener("keydown", e => { if (e.key === "Enter") applyAdjustment(); });
+</script>
+</body>
+</html>
