@@ -19,7 +19,7 @@ from pathlib import Path
 
 from scheduler.data.mock_week import WEEK_START, DAYS
 
-_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 _TOKEN_PATH = Path("token.json")
 _CREDENTIALS_PATH = Path("credentials.json")
 _DAY_NAME = {(WEEK_START + timedelta(days=i)).isoformat(): name for i, name in enumerate(DAYS)}
