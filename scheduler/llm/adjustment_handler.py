@@ -69,6 +69,9 @@ def _parse_actions(change_text: str, schedule: list[ScheduleEntry]) -> list[dict
     )
 
     raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0].strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
