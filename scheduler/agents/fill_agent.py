@@ -88,14 +88,19 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
     # quota-based: remaining_hours[label] = hours left to place
     # session-based: sessions_left[label] = sessions left to place
     remaining: dict[str, float] = {}
+    # Fixed daily cap computed once from total — prevents catch-up cascade across days
+    daily_cap: dict[str, float] = {}
     for act in activities:
         if _is_quota_based(act):
             remaining[act["label"]] = act["total_hours"]
+            daily_cap[act["label"]] = act["total_hours"] / len(DAYS)
         else:
             remaining[act["label"]] = float(act.get("sessions_per_week", 1))
 
     for day in DAYS:
         gaps = _free_gaps(day, blocked, window_start, window_end)
+        # placed_today tracks hours placed per quota activity across ALL gaps on this day
+        placed_today: dict[str, float] = {act["label"]: 0.0 for act in activities if _is_quota_based(act)}
 
         for gap_start, gap_end in gaps:
             gap_cursor = gap_start
@@ -107,9 +112,13 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
 
                 if _is_quota_based(activity):
                     chunk = activity["chunk_hours"]
-                    # Place as many chunks as fit in this gap
+                    daily_limit = daily_cap[label]
+
                     while remaining[label] > 0 and gap_cursor + MIN_GAP_HOURS <= gap_end:
-                        place_hours = min(chunk, remaining[label], gap_end - gap_cursor)
+                        headroom = daily_limit - placed_today[label]
+                        if headroom < 0.05:  # daily cap reached
+                            break
+                        place_hours = min(chunk, remaining[label], gap_end - gap_cursor, headroom)
                         if place_hours < MIN_GAP_HOURS:
                             break
 
@@ -126,6 +135,7 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
                         entries.append(entry)
                         blocked = blocked + [{"day": day, "start_hour": gap_cursor, "end_hour": end}]
                         remaining[label] -= place_hours
+                        placed_today[label] += place_hours
                         gap_cursor = end
                 else:
                     # Session-based: place one session per gap slot
