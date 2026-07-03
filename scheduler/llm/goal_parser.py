@@ -64,6 +64,9 @@ def parse_goals(goals: str, calendar_id: str = "primary") -> UserConfig:
     )
 
     raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0].strip()
 
     try:
         data = json.loads(raw)
