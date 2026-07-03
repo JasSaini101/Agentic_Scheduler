@@ -1,9 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from scheduler.llm.goal_parser import parse_goals
+from scheduler.llm.pipeline import pipeline
 from scheduler.llm.adjustment_handler import apply as apply_adjustment
-from scheduler import orchestrator
 
 
 def main():
@@ -13,13 +12,8 @@ def main():
         print("No goals provided. Exiting.")
         return
 
-    print("\n[main] Parsing goals...")
-    user_config = parse_goals(goals)
-    print(f"[main] Parsed {len(user_config.activities)} activities:")
-    for a in user_config.activities:
-        print(f"  - {a.name} ({a.category}): {a.sessions_per_week}x/week × {a.duration_hours}h")
-
-    schedule = orchestrator.run(user_config)
+    print("\n[main] Parsing goals and building schedule...")
+    schedule, user_config = pipeline.invoke(goals)
 
     print("\n")
     change = input("Any changes? (press Enter to skip) ").strip()

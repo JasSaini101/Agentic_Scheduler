@@ -2,80 +2,65 @@
 Adjustment Handler
 ──────────────────
 Applies natural language mid-week changes to an existing schedule.
+Uses LangChain with ChatAnthropic + JsonOutputParser for structured action parsing.
 
-The LLM produces a JSON action list; this module applies them:
+Actions produced by the LLM:
   - remove: delete matching entry from schedule + Google Calendar
   - add:    find the best open slot for the activity via the relevant agent
-
-Example actions JSON:
-[
-  {"action": "remove", "day": "Thursday", "label": "Family dinner"},
-  {"action": "add", "activity": "basketball", "day": "Saturday"}
-]
 """
 
-import json
 import os
 import warnings
 
-import anthropic
+from langchain_anthropic import ChatAnthropic
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 
 from scheduler.config import UserConfig
 from scheduler.models import ScheduleEntry
 
-_SYSTEM_PROMPT = """
+_SYSTEM_PROMPT = """\
 You are a scheduling assistant. The user wants to make changes to their weekly schedule.
-Parse their request into a JSON list of actions. Output ONLY valid JSON — no prose, no markdown.
+Parse their request into a JSON list of actions.
 
 Each action must be one of:
-  {"action": "remove", "day": "DayName", "label": "Event label to remove"}
-  {"action": "add", "activity": "activity name", "day": "DayName"}
+  {{"action": "remove", "day": "DayName", "label": "Event label to remove"}}
+  {{"action": "add", "activity": "activity name", "day": "DayName"}}
 
 For "remove": match the event label as closely as possible from context.
 For "add": use the activity name from the user's goals (e.g. "basketball", "gym", "tennis").
 Day names are: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday.
 
-Example output:
-[
-  {"action": "remove", "day": "Thursday", "label": "Family dinner"},
-  {"action": "remove", "day": "Saturday", "label": "Gym session"},
-  {"action": "add", "activity": "basketball", "day": "Saturday"}
-]
-""".strip()
+Return ONLY a JSON array of action objects, no other text.\
+"""
 
 
-def _parse_actions(change_text: str, schedule: list[ScheduleEntry]) -> list[dict]:
+def _build_chain():
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise EnvironmentError("ANTHROPIC_API_KEY is not set.")
 
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", _SYSTEM_PROMPT),
+        ("human", "Current schedule:\n{schedule_summary}\n\nRequested change: {change_text}"),
+    ])
+
+    llm = ChatAnthropic(
+        model="claude-haiku-4-5-20251001",
+        temperature=0,
+        api_key=api_key,
+    )
+
+    return (prompt | llm | JsonOutputParser()).with_retry(stop_after_attempt=2)
+
+
+def _parse_actions(change_text: str, schedule: list[ScheduleEntry]) -> list[dict]:
     schedule_summary = "\n".join(
         f"- {e.day} {e.start_hour}:00 — {e.label} ({e.category})"
         for e in schedule
     )
-
-    user_message = (
-        f"Current schedule:\n{schedule_summary}\n\n"
-        f"Requested change: {change_text}"
-    )
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=512,
-        temperature=0,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        raw = raw.rsplit("```", 1)[0].strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Adjustment parser returned invalid JSON: {raw!r}") from exc
+    chain = _build_chain()
+    return chain.invoke({"schedule_summary": schedule_summary, "change_text": change_text})
 
 
 def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str) -> None:
@@ -119,7 +104,6 @@ def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str) -> None:
 
 
 def _add_activity(activity_name: str, day: str, schedule: list[ScheduleEntry], user_config: UserConfig) -> ScheduleEntry | None:
-    from scheduler.data.mock_week import DAYS
     from scheduler.week_context import build_week_context
 
     blocked = [
@@ -128,7 +112,6 @@ def _add_activity(activity_name: str, day: str, schedule: list[ScheduleEntry], u
     ]
     week_context = {**build_week_context(), "blocked": blocked}
 
-    # Find the matching target in user_config
     target = next(
         (t for t in user_config.activities if t.name.lower() == activity_name.lower()),
         None,
@@ -140,7 +123,6 @@ def _add_activity(activity_name: str, day: str, schedule: list[ScheduleEntry], u
 
     if target.category == "gym":
         import scheduler.agents.gym_agent as gym_agent
-        # Temporarily override config to place exactly 1 session on the target day
         from scheduler.config import ActivityTarget, UserConfig as UC
         single = UC(
             activities=[ActivityTarget(
@@ -153,7 +135,6 @@ def _add_activity(activity_name: str, day: str, schedule: list[ScheduleEntry], u
             fill_window=user_config.fill_window,
             calendar_id=user_config.calendar_id,
         )
-        # Filter week_context to only the target day
         day_blocked = [b for b in blocked if b["day"] != day]
         entries = gym_agent.run({**week_context, "blocked": day_blocked}, single)
         return next((e for e in entries if e.day == day), entries[0] if entries else None)
@@ -181,10 +162,7 @@ def _add_activity(activity_name: str, day: str, schedule: list[ScheduleEntry], u
 
 
 def apply(change_text: str, schedule: list[ScheduleEntry], user_config: UserConfig) -> list[ScheduleEntry]:
-    """
-    Parse the natural language change, apply remove/add actions, update Google Calendar.
-    Returns the modified schedule.
-    """
+    """Parse the NL change, apply remove/add actions, update Google Calendar."""
     actions = _parse_actions(change_text, schedule)
     print(f"\n[adjustment] Applying {len(actions)} action(s): {actions}")
 
@@ -210,7 +188,6 @@ def apply(change_text: str, schedule: list[ScheduleEntry], user_config: UserConf
             if new_entry:
                 result.append(new_entry)
                 print(f"  [adjustment] Added: {new_entry.label} on {new_entry.day} at {new_entry.start_hour}:00")
-                # Write the new event to calendar
                 try:
                     from scheduler.data.providers.calendar_writer import write_schedule
                     write_schedule([new_entry], user_config.calendar_id)
