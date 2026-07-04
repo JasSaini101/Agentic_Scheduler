@@ -22,9 +22,7 @@ from scheduler.models import ScheduleEntry
 from scheduler.config import UserConfig
 from scheduler.llm.pipeline import pipeline
 from scheduler.llm.adjustment_handler import apply as apply_adjustment
-from scheduler.data.providers.google_auth import (
-    credentials_path, token_path, SCOPES,
-)
+from scheduler.data.providers.google_auth import SCOPES, credentials_source, save_token
 
 app = FastAPI(title="Agentic Scheduler")
 
@@ -38,11 +36,10 @@ _oauth_states: set[str] = set()
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _base_url() -> str:
-    return os.getenv("BASE_URL", "http://localhost:8000")
+    return os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 
 
 def _is_authorized() -> bool:
-    """True if a valid token.json exists."""
     try:
         from scheduler.data.providers.google_auth import get_credentials
         get_credentials()
@@ -78,16 +75,14 @@ class AdjustResponse(BaseModel):
 @app.get("/auth/google")
 def auth_google():
     """Redirect the user to Google's OAuth consent screen."""
-    creds_path = credentials_path()
-    if not creds_path.exists():
-        raise HTTPException(
-            status_code=500,
-            detail="credentials.json not found. Download it from Google Cloud Console and place it in the repo root.",
-        )
+    try:
+        creds_file = credentials_source()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     from google_auth_oauthlib.flow import Flow
     flow = Flow.from_client_secrets_file(
-        str(creds_path),
+        creds_file,
         scopes=SCOPES,
         redirect_uri=f"{_base_url()}/auth/callback",
     )
@@ -102,21 +97,25 @@ def auth_google():
 
 @app.get("/auth/callback")
 def auth_callback(code: str, state: str):
-    """Exchange the authorization code for tokens and save token.json."""
+    """Exchange the authorization code for tokens and persist them."""
     if state not in _oauth_states:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
     _oauth_states.discard(state)
 
-    creds_path = credentials_path()
+    try:
+        creds_file = credentials_source()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
     from google_auth_oauthlib.flow import Flow
     flow = Flow.from_client_secrets_file(
-        str(creds_path),
+        creds_file,
         scopes=SCOPES,
         redirect_uri=f"{_base_url()}/auth/callback",
         state=state,
     )
     flow.fetch_token(code=code)
-    token_path().write_text(flow.credentials.to_json())
+    save_token(flow.credentials.to_json())
 
     return RedirectResponse("/?authorized=1")
 
@@ -124,6 +123,19 @@ def auth_callback(code: str, state: str):
 @app.get("/api/auth-status")
 def auth_status():
     return {"authorized": _is_authorized()}
+
+
+@app.get("/api/token")
+def get_token():
+    """
+    Return the current token JSON so the user can set it as GOOGLE_TOKEN_JSON
+    on Render to survive restarts. Only useful after a successful OAuth flow.
+    """
+    from scheduler.data.providers.google_auth import _token_json
+    raw = _token_json()
+    if not raw:
+        raise HTTPException(status_code=404, detail="No token found — authorize first.")
+    return {"token_json": raw}
 
 
 # ── Schedule endpoints ─────────────────────────────────────────────────────

@@ -1,9 +1,19 @@
 """
 Shared Google OAuth helper.
-Reads token.json if it exists and is valid; raises RuntimeError otherwise.
-The web OAuth flow (web/app.py) is responsible for creating token.json.
+
+Credential resolution order:
+  1. credentials.json file (local dev)
+  2. GOOGLE_CREDENTIALS_JSON env var (Render / hosted — paste the file contents)
+
+Token resolution order:
+  1. token.json file (local dev, or written after web OAuth flow)
+  2. GOOGLE_TOKEN_JSON env var (Render — set after first successful auth)
+  3. In-memory _token_store (survives within a single process lifetime)
 """
 
+import json
+import os
+import tempfile
 from pathlib import Path
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -11,21 +21,64 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 _TOKEN_PATH = Path("token.json")
 _CREDENTIALS_PATH = Path("credentials.json")
 
+# In-process token cache — populated after web OAuth flow completes.
+# Survives restarts only if GOOGLE_TOKEN_JSON env var is also set.
+_token_store: dict[str, str] = {}   # {"token": "<json string>"}
+
+
+def _credentials_source() -> str:
+    """Return path to a credentials.json file, writing a temp file if needed."""
+    if _CREDENTIALS_PATH.exists():
+        return str(_CREDENTIALS_PATH)
+
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if not raw:
+        raise RuntimeError(
+            "Google credentials not found. Either place credentials.json in the "
+            "repo root, or set the GOOGLE_CREDENTIALS_JSON environment variable."
+        )
+    # Write to a temp file so google-auth-oauthlib can read it
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, prefix="gcreds_"
+    )
+    tmp.write(raw)
+    tmp.flush()
+    return tmp.name
+
+
+def _token_json() -> str | None:
+    """Return the token JSON string from any available source, or None."""
+    if _token_store.get("token"):
+        return _token_store["token"]
+    if _TOKEN_PATH.exists():
+        return _TOKEN_PATH.read_text()
+    return os.getenv("GOOGLE_TOKEN_JSON")
+
+
+def save_token(token_json: str) -> None:
+    """Persist a token JSON string to all available stores."""
+    _token_store["token"] = token_json
+    try:
+        _TOKEN_PATH.write_text(token_json)
+    except OSError:
+        pass  # read-only filesystem (some hosted envs) — in-memory is enough
+
 
 def get_credentials():
-    """Return valid Google credentials or raise RuntimeError."""
+    """Return valid Google credentials or raise RuntimeError('not_authorized')."""
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
 
-    if not _TOKEN_PATH.exists():
+    raw = _token_json()
+    if not raw:
         raise RuntimeError("not_authorized")
 
-    creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), SCOPES)
+    creds = Credentials.from_authorized_user_info(json.loads(raw), SCOPES)
 
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            _TOKEN_PATH.write_text(creds.to_json())
+            save_token(creds.to_json())
         else:
             raise RuntimeError("not_authorized")
 
@@ -38,9 +91,6 @@ def get_service():
     return build("calendar", "v3", credentials=get_credentials())
 
 
-def credentials_path() -> Path:
-    return _CREDENTIALS_PATH
-
-
-def token_path() -> Path:
-    return _TOKEN_PATH
+def credentials_source() -> str:
+    """Public accessor used by web/app.py OAuth routes."""
+    return _credentials_source()
