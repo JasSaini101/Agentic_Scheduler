@@ -6,6 +6,7 @@ A ScheduleEntry is what ends up in the final weekly schedule.
 
 from dataclasses import dataclass, field
 from typing import Optional
+
 from pydantic import BaseModel, field_validator
 
 
@@ -36,7 +37,6 @@ class TimeSlot:
         return not (self.end_hour <= other_start or self.start_hour >= other_end)
 
 
-@dataclass
 class ScheduleEntry(BaseModel):
     """A confirmed entry in the final weekly schedule."""
     day: str
