@@ -12,35 +12,13 @@ OAuth scope required: https://www.googleapis.com/auth/calendar
 (Delete token.json and re-run to re-authorize if you previously used readonly scope.)
 """
 
-import os
 from datetime import datetime, timedelta, timezone
 
 from scheduler.data.mock_week import DAYS, WEEK_START
 from scheduler.models import ScheduleEntry
+from scheduler.data.providers.google_auth import get_service as _get_service
 
-_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 _SOURCE_TAG = "agentic_scheduler"
-
-
-def _get_service():
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
-
-    creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", _SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", _SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as f:
-            f.write(creds.to_json())
-
-    return build("calendar", "v3", credentials=creds)
 
 
 def _day_to_date(day_name: str) -> str:

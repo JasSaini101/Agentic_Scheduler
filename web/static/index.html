@@ -214,9 +214,47 @@
     width: 10px; height: 10px;
     border-radius: 3px;
   }
+
+  /* ── Auth banner ── */
+  #auth-banner {
+    display: none;
+    padding: 12px 24px;
+    background: #1e1a2e;
+    border-bottom: 1px solid #4f46e5;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #auth-banner.visible { display: flex; }
+  #auth-banner span { flex: 1; font-size: 13px; color: #a5b4fc; }
+  #auth-banner a {
+    background: #4f46e5;
+    color: #fff;
+    text-decoration: none;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  #auth-banner a:hover { background: #6366f1; }
+
+  #auth-indicator {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 99px;
+    white-space: nowrap;
+  }
+  #auth-indicator.ok  { background: #14532d; color: #86efac; }
+  #auth-indicator.no  { background: #3b1f1f; color: #fca5a5; }
 </style>
 </head>
 <body>
+
+<div id="auth-banner">
+  <span>Connect your Google Calendar to read existing events and write your schedule.</span>
+  <a href="/auth/google">Connect Google Calendar</a>
+</div>
 
 <header>
   <h1>Agentic Scheduler</h1>
@@ -225,6 +263,7 @@
            placeholder="e.g. gym 3x, tennis twice, 40h work, basketball once" />
     <button id="build-btn">Build Schedule</button>
   </div>
+  <div id="auth-indicator" class="no">Calendar: not connected</div>
 </header>
 
 <div id="adjust-bar">
@@ -265,17 +304,20 @@ const PX_PER_HR  = 56;
 
 // ── State ─────────────────────────────────────────────────────────────────
 let sessionId = null;
+let calendarAuthorized = false;
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
-const goalsInput  = document.getElementById("goals-input");
-const buildBtn    = document.getElementById("build-btn");
-const adjustBar   = document.getElementById("adjust-bar");
-const adjustInput = document.getElementById("adjust-input");
-const adjustBtn   = document.getElementById("adjust-btn");
-const statusEl    = document.getElementById("status");
-const calEl       = document.getElementById("calendar");
-const legend      = document.getElementById("legend");
-const tooltip     = document.getElementById("tooltip");
+const goalsInput     = document.getElementById("goals-input");
+const buildBtn       = document.getElementById("build-btn");
+const adjustBar      = document.getElementById("adjust-bar");
+const adjustInput    = document.getElementById("adjust-input");
+const adjustBtn      = document.getElementById("adjust-btn");
+const statusEl       = document.getElementById("status");
+const calEl          = document.getElementById("calendar");
+const legend         = document.getElementById("legend");
+const tooltip        = document.getElementById("tooltip");
+const authBanner     = document.getElementById("auth-banner");
+const authIndicator  = document.getElementById("auth-indicator");
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function setStatus(msg, isError = false) {
@@ -386,6 +428,32 @@ function renderCalendar(schedule) {
   calEl.appendChild(grid);
 }
 
+// ── Auth check ────────────────────────────────────────────────────────────
+async function checkAuth() {
+  try {
+    const res = await fetch("/api/auth-status");
+    const { authorized } = await res.json();
+    calendarAuthorized = authorized;
+    if (authorized) {
+      authBanner.classList.remove("visible");
+      authIndicator.className = "ok";
+      authIndicator.textContent = "Calendar: connected";
+      setStatus("Enter your weekly goals above to get started.");
+    } else {
+      authBanner.classList.add("visible");
+      authIndicator.className = "no";
+      authIndicator.textContent = "Calendar: not connected";
+      setStatus("Connect your Google Calendar above before building a schedule.");
+    }
+  } catch (_) {}
+}
+
+// Check auth on load; also handle ?authorized=1 redirect from OAuth callback
+checkAuth();
+if (new URLSearchParams(location.search).get("authorized") === "1") {
+  history.replaceState({}, "", "/");
+}
+
 // ── API calls ─────────────────────────────────────────────────────────────
 async function buildSchedule() {
   const goals = goalsInput.value.trim();
@@ -401,6 +469,12 @@ async function buildSchedule() {
       body: JSON.stringify({ goals }),
     });
     const data = await res.json();
+    if (res.status === 401) {
+      authBanner.classList.add("visible");
+      setStatus("Please connect your Google Calendar first.", true);
+      buildBtn.disabled = false;
+      return;
+    }
     if (!res.ok) throw new Error(data.detail || "Unknown error");
 
     sessionId = data.session_id;
