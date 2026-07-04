@@ -65,18 +65,8 @@ def _parse_actions(change_text: str, schedule: list[ScheduleEntry]) -> list[dict
 
 def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str) -> None:
     try:
-        from googleapiclient.discovery import build
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-
-        creds = Credentials.from_authorized_user_file(
-            "token.json",
-            ["https://www.googleapis.com/auth/calendar"],
-        )
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-
-        service = build("calendar", "v3", credentials=creds)
+        from scheduler.data.providers.google_auth import get_service
+        service = get_service()
         from scheduler.data.mock_week import DAYS, WEEK_START
         from datetime import timedelta
 
