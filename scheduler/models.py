@@ -6,6 +6,7 @@ A ScheduleEntry is what ends up in the final weekly schedule.
 
 from dataclasses import dataclass, field
 from typing import Optional
+from pydantic import BaseModel, field_validator
 
 
 @dataclass
@@ -36,7 +37,7 @@ class TimeSlot:
 
 
 @dataclass
-class ScheduleEntry:
+class ScheduleEntry(BaseModel):
     """A confirmed entry in the final weekly schedule."""
     day: str
     start_hour: int
@@ -44,7 +45,12 @@ class ScheduleEntry:
     label: str
     category: str   # "gym" | "sport" | "hard_block" | "fill"
     score: Optional[float] = None
-    reasons: list[str] = field(default_factory=list)
+    reasons: list[str] = []
+
+    @field_validator("start_hour", mode="before")
+    @classmethod
+    def coerce_start_hour(cls, v):
+        return int(v)
 
     def __str__(self):
         end = int(self.end_hour)
