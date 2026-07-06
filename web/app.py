@@ -29,8 +29,8 @@ app = FastAPI(title="Agentic Scheduler")
 # In-memory session store: session_id → (schedule, user_config)
 _sessions: dict[str, tuple[list[ScheduleEntry], UserConfig]] = {}
 
-# OAuth state store: state → None (used to validate callback)
-_oauth_states: set[str] = set()
+# OAuth flow store: state → Flow object (preserves code_verifier across requests)
+_oauth_flows: dict[str, object] = {}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -91,24 +91,29 @@ def auth_google():
         include_granted_scopes="true",
         prompt="consent",
     )
-    _oauth_states.add(state)
+    # Store the flow object so the callback can reuse the same code_verifier
+    _oauth_flows[state] = flow
     return RedirectResponse(auth_url)
 
 
 @app.get("/auth/callback")
 def auth_callback(code: str, state: str = ""):
     """Exchange the authorization code for tokens and persist them."""
-    try:
-        creds_file = credentials_source()
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    flow = _oauth_flows.pop(state, None)
 
-    from google_auth_oauthlib.flow import Flow
-    flow = Flow.from_client_secrets_file(
-        creds_file,
-        scopes=SCOPES,
-        redirect_uri=f"{_base_url()}/auth/callback",
-    )
+    if flow is None:
+        # Fallback: build a fresh flow without PKCE (no verifier needed)
+        try:
+            creds_file = credentials_source()
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        from google_auth_oauthlib.flow import Flow
+        flow = Flow.from_client_secrets_file(
+            creds_file,
+            scopes=SCOPES,
+            redirect_uri=f"{_base_url()}/auth/callback",
+        )
+
     flow.fetch_token(code=code)
     save_token(flow.credentials.to_json())
 
