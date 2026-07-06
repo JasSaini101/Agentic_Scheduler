@@ -29,8 +29,8 @@ app = FastAPI(title="Agentic Scheduler")
 # In-memory session store: session_id → (schedule, user_config)
 _sessions: dict[str, tuple[list[ScheduleEntry], UserConfig]] = {}
 
-# OAuth flow store: state → Flow object (preserves code_verifier across requests)
-_oauth_flows: dict[str, object] = {}
+# OAuth verifier store: state → code_verifier string
+_oauth_verifiers: dict[str, str] = {}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -81,40 +81,41 @@ def auth_google():
         raise HTTPException(status_code=500, detail=str(e))
 
     from google_auth_oauthlib.flow import Flow
+    import secrets as _secrets
     flow = Flow.from_client_secrets_file(
         creds_file,
         scopes=SCOPES,
         redirect_uri=f"{_base_url()}/auth/callback",
     )
+    # Generate PKCE verifier explicitly so we can store and reuse it
+    code_verifier = _secrets.token_urlsafe(96)
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
+        code_verifier=code_verifier,
     )
-    # Store the flow object so the callback can reuse the same code_verifier
-    _oauth_flows[state] = flow
+    _oauth_verifiers[state] = code_verifier
     return RedirectResponse(auth_url)
 
 
 @app.get("/auth/callback")
 def auth_callback(code: str, state: str = ""):
     """Exchange the authorization code for tokens and persist them."""
-    flow = _oauth_flows.pop(state, None)
+    code_verifier = _oauth_verifiers.pop(state, None)
 
-    if flow is None:
-        # Fallback: build a fresh flow without PKCE (no verifier needed)
-        try:
-            creds_file = credentials_source()
-        except RuntimeError as e:
-            raise HTTPException(status_code=500, detail=str(e))
-        from google_auth_oauthlib.flow import Flow
-        flow = Flow.from_client_secrets_file(
-            creds_file,
-            scopes=SCOPES,
-            redirect_uri=f"{_base_url()}/auth/callback",
-        )
+    try:
+        creds_file = credentials_source()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    flow.fetch_token(code=code)
+    from google_auth_oauthlib.flow import Flow
+    flow = Flow.from_client_secrets_file(
+        creds_file,
+        scopes=SCOPES,
+        redirect_uri=f"{_base_url()}/auth/callback",
+    )
+    flow.fetch_token(code=code, code_verifier=code_verifier)
     save_token(flow.credentials.to_json())
 
     return RedirectResponse("/?authorized=1")
