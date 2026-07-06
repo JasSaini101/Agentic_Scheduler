@@ -96,12 +96,8 @@ def auth_google():
 
 
 @app.get("/auth/callback")
-def auth_callback(code: str, state: str):
+def auth_callback(code: str, state: str = ""):
     """Exchange the authorization code for tokens and persist them."""
-    if state not in _oauth_states:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state")
-    _oauth_states.discard(state)
-
     try:
         creds_file = credentials_source()
     except RuntimeError as e:
@@ -112,7 +108,6 @@ def auth_callback(code: str, state: str):
         creds_file,
         scopes=SCOPES,
         redirect_uri=f"{_base_url()}/auth/callback",
-        state=state,
     )
     flow.fetch_token(code=code)
     save_token(flow.credentials.to_json())
