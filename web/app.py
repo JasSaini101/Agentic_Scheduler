@@ -7,7 +7,6 @@ import sys
 import os
 import hashlib
 import base64
-import tempfile
 import secrets as _secrets
 from pathlib import Path
 
@@ -33,29 +32,12 @@ app = FastAPI(title="Agentic Scheduler")
 # In-memory session store: session_id → (schedule, user_config)
 _sessions: dict[str, tuple[list[ScheduleEntry], UserConfig]] = {}
 
-# Temp dir for PKCE verifiers — survives uvicorn --reload restarts
-_VERIFIER_DIR = Path(tempfile.gettempdir()) / "agentic_scheduler_oauth"
-
-
 def _pkce_pair() -> tuple[str, str]:
+    """Return (code_verifier, code_challenge) for PKCE S256."""
     verifier = _secrets.token_urlsafe(96)
     digest = hashlib.sha256(verifier.encode()).digest()
     challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
     return verifier, challenge
-
-
-def _save_verifier(state: str, verifier: str) -> None:
-    _VERIFIER_DIR.mkdir(exist_ok=True)
-    (_VERIFIER_DIR / state).write_text(verifier)
-
-
-def _pop_verifier(state: str) -> str | None:
-    p = _VERIFIER_DIR / state
-    if p.exists():
-        v = p.read_text()
-        p.unlink(missing_ok=True)
-        return v
-    return None
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -112,21 +94,26 @@ def auth_google():
         redirect_uri=f"{_base_url()}/auth/callback",
     )
     code_verifier, code_challenge = _pkce_pair()
-    auth_url, state = flow.authorization_url(
+    # Embed verifier in state so it survives the redirect without server storage.
+    # token_urlsafe chars are [A-Za-z0-9_-] — no '.' — making '.' a safe separator.
+    csrf = _secrets.token_urlsafe(16)
+    composite_state = f"{code_verifier}.{csrf}"
+    auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
+        state=composite_state,
         code_challenge=code_challenge,
         code_challenge_method="S256",
     )
-    _save_verifier(state, code_verifier)
     return RedirectResponse(auth_url)
 
 
 @app.get("/auth/callback")
 def auth_callback(code: str, state: str = ""):
     """Exchange the authorization code for tokens and persist them."""
-    code_verifier = _pop_verifier(state)
+    # Extract verifier from composite state "<verifier>.<csrf>"
+    code_verifier = state.split(".", 1)[0] if state and "." in state else None
     try:
         creds_file = credentials_source()
     except RuntimeError as e:
