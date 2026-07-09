@@ -412,11 +412,19 @@ function renderCalendar(schedule) {
       const height = Math.max((entry.end_hour - entry.start_hour) * PX_PER_HR - 2, 18);
 
       const block = document.createElement("div");
-      block.className = `event-block ${entry.category}`;
+      // Whitelist category → CSS class; label rendered via textContent (no HTML injection)
+      const knownCats = ["hard_block", "gym", "sport", "fill"];
+      const cat = knownCats.includes(entry.category) ? entry.category : "fill";
+      block.className = `event-block ${cat}`;
       block.style.cssText = `top:${top}px; height:${height}px;`;
 
-      const dur = (entry.end_hour - entry.start_hour).toFixed(1);
-      block.innerHTML = `<div>${entry.label}</div><div style="opacity:.7;font-size:10px">${dur}h</div>`;
+      const labelDiv = document.createElement("div");
+      labelDiv.textContent = entry.label;
+      const durDiv = document.createElement("div");
+      durDiv.style.cssText = "opacity:.7;font-size:10px";
+      durDiv.textContent = (entry.end_hour - entry.start_hour).toFixed(1) + "h";
+      block.appendChild(labelDiv);
+      block.appendChild(durDiv);
 
       block.addEventListener("mouseenter", () => showTooltip(entry, block));
       col.appendChild(block);
@@ -480,7 +488,11 @@ async function buildSchedule() {
     sessionId = data.session_id;
     renderCalendar(data.schedule);
     adjustBar.classList.add("visible");
-    setStatus(`Schedule built — ${data.schedule.length} events across the week.`);
+    if (data.calendar_synced === false) {
+      setStatus(`Schedule built, but Google Calendar sync failed — events were NOT written to your calendar. (${data.calendar_error || "unknown error"})`, true);
+    } else {
+      setStatus(`Schedule built — ${data.schedule.length} events across the week.`);
+    }
   } catch (err) {
     setStatus("Error: " + err.message, true);
   } finally {

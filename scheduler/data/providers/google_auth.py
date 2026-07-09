@@ -13,7 +13,6 @@ Token resolution order:
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -26,24 +25,18 @@ _CREDENTIALS_PATH = Path("credentials.json")
 _token_store: dict[str, str] = {}   # {"token": "<json string>"}
 
 
-def _credentials_source() -> str:
-    """Return path to a credentials.json file, writing a temp file if needed."""
+def credentials_config() -> dict:
+    """Return the OAuth client config as a dict — never written to disk."""
     if _CREDENTIALS_PATH.exists():
-        return str(_CREDENTIALS_PATH)
-
-    raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+        raw = _CREDENTIALS_PATH.read_text()
+    else:
+        raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if not raw:
         raise RuntimeError(
             "Google credentials not found. Either place credentials.json in the "
             "repo root, or set the GOOGLE_CREDENTIALS_JSON environment variable."
         )
-    # Write to a temp file so google-auth-oauthlib can read it
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False, prefix="gcreds_"
-    )
-    tmp.write(raw)
-    tmp.flush()
-    return tmp.name
+    return json.loads(raw)
 
 
 def _token_json() -> str | None:
@@ -89,8 +82,3 @@ def get_service():
     """Return an authenticated Google Calendar service."""
     from googleapiclient.discovery import build
     return build("calendar", "v3", credentials=get_credentials())
-
-
-def credentials_source() -> str:
-    """Public accessor used by web/app.py OAuth routes."""
-    return _credentials_source()
