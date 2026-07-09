@@ -57,12 +57,20 @@ def _delete_scheduler_events(service, calendar_id: str) -> None:
 
 
 def write_schedule(entries: list[ScheduleEntry], calendar_id: str = "primary") -> None:
-    """Write ScheduleEntry list to Google Calendar, replacing any prior scheduler events."""
+    """Write ScheduleEntry list to Google Calendar, replacing any prior scheduler events.
+
+    hard_block entries mirror events that already exist in the calendar —
+    writing them would duplicate them, so they are skipped."""
     service = _get_service()
     _delete_scheduler_events(service, calendar_id)
 
+    to_write = [e for e in entries if e.category != "hard_block"]
+    skipped = len(entries) - len(to_write)
+    if skipped:
+        print(f"[calendar_writer] Skipped {skipped} existing calendar event(s) (hard blocks)")
+
     created = 0
-    for entry in entries:
+    for entry in to_write:
         date_str = _day_to_date(entry.day)
         start_dt = f"{date_str}T{entry.start_hour:02d}:00:00"
         end_hour = int(entry.end_hour)
