@@ -88,75 +88,59 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
     # quota-based: remaining_hours[label] = hours left to place
     # session-based: sessions_left[label] = sessions left to place
     remaining: dict[str, float] = {}
-    # Fixed daily cap computed once from total — prevents catch-up cascade across days
-    daily_cap: dict[str, float] = {}
     for act in activities:
         if _is_quota_based(act):
             remaining[act["label"]] = act["total_hours"]
-            daily_cap[act["label"]] = act["total_hours"] / len(DAYS)
         else:
             remaining[act["label"]] = float(act.get("sessions_per_week", 1))
 
-    for day in DAYS:
-        gaps = _free_gaps(day, blocked, window_start, window_end)
-        # placed_today tracks hours placed per quota activity across ALL gaps on this day
-        placed_today: dict[str, float] = {act["label"]: 0.0 for act in activities if _is_quota_based(act)}
+    def _place(day: str, start: float, duration: float, activity: dict) -> None:
+        nonlocal blocked
+        end = start + duration
+        entry = ScheduleEntry(
+            day=day,
+            start_hour=int(start),
+            end_hour=end,
+            label=activity["label"],
+            category="fill",
+            reasons=[activity.get("reason", "")],
+        )
+        print(f"  [fill_agent]  Placed:   {entry}")
+        entries.append(entry)
+        blocked = blocked + [{"day": day, "start_hour": start, "end_hour": end}]
 
-        for gap_start, gap_end in gaps:
-            gap_cursor = gap_start
-
+    # Round-robin placement: sweep the week repeatedly, placing at most ONE
+    # chunk/session per activity per day per pass. This spreads work evenly
+    # across the week instead of piling everything into Monday's first gaps.
+    progress = True
+    while progress and any(v > 0 for v in remaining.values()):
+        progress = False
+        for day in DAYS:
             for activity in activities:
                 label = activity["label"]
                 if remaining.get(label, 0) <= 0:
                     continue
 
                 if _is_quota_based(activity):
-                    chunk = activity["chunk_hours"]
-                    daily_limit = daily_cap[label]
-
-                    while remaining[label] > 0 and gap_cursor + MIN_GAP_HOURS <= gap_end:
-                        headroom = daily_limit - placed_today[label]
-                        if headroom < 0.05:  # daily cap reached
-                            break
-                        place_hours = min(chunk, remaining[label], gap_end - gap_cursor, headroom)
-                        if place_hours < MIN_GAP_HOURS:
-                            break
-
-                        end = gap_cursor + place_hours
-                        entry = ScheduleEntry(
-                            day=day,
-                            start_hour=int(gap_cursor),
-                            end_hour=end,
-                            label=label,
-                            category="fill",
-                            reasons=[activity.get("reason", "")],
-                        )
-                        print(f"  [fill_agent]  Placed:   {entry}  ({place_hours:.1f}h of {remaining[label]:.1f}h remaining)")
-                        entries.append(entry)
-                        blocked = blocked + [{"day": day, "start_hour": gap_cursor, "end_hour": end}]
-                        remaining[label] -= place_hours
-                        placed_today[label] += place_hours
-                        gap_cursor = end
-                else:
-                    # Session-based: place one session per gap slot
-                    needed = activity["duration"] + activity.get("padding", 0)
-                    if gap_end - gap_cursor < needed:
+                    place_hours = min(activity["chunk_hours"], remaining[label])
+                    if place_hours < MIN_GAP_HOURS:
+                        # Leftover sliver too small to schedule meaningfully
+                        remaining[label] = 0
                         continue
+                    needed = place_hours
+                    duration = place_hours
+                else:
+                    duration = activity["duration"]
+                    needed = duration + activity.get("padding", 0)
 
-                    end = gap_cursor + activity["duration"]
-                    entry = ScheduleEntry(
-                        day=day,
-                        start_hour=int(gap_cursor),
-                        end_hour=end,
-                        label=label,
-                        category="fill",
-                        reasons=[activity.get("reason", "")],
-                    )
-                    print(f"  [fill_agent]  Placed:   {entry}")
-                    entries.append(entry)
-                    blocked = blocked + [{"day": day, "start_hour": gap_cursor, "end_hour": end}]
-                    remaining[label] -= 1
-                    gap_cursor = end
+                gaps = _free_gaps(day, blocked, window_start, window_end)
+                slot = next(((s, e) for s, e in gaps if e - s >= needed), None)
+                if slot is None:
+                    continue
+
+                _place(day, slot[0], duration, activity)
+                remaining[label] -= duration if _is_quota_based(activity) else 1
+                progress = True
 
     # Warn about unplaced quota hours
     for act in activities:

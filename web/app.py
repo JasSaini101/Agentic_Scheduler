@@ -19,13 +19,13 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scheduler.models import ScheduleEntry
 from scheduler.config import UserConfig
 from scheduler.llm.pipeline import pipeline
 from scheduler.llm.adjustment_handler import apply as apply_adjustment
-from scheduler.data.providers.google_auth import SCOPES, credentials_source, save_token
+from scheduler.data.providers.google_auth import SCOPES, credentials_config, save_token
 
 app = FastAPI(title="Agentic Scheduler")
 
@@ -58,19 +58,21 @@ def _is_authorized() -> bool:
 # ── Request / Response models ──────────────────────────────────────────────
 
 class ScheduleRequest(BaseModel):
-    goals: str
-    calendar_id: str = "primary"
+    goals: str = Field(min_length=1, max_length=2000)
+    calendar_id: str = Field(default="primary", max_length=256)
 
 
 class ScheduleResponse(BaseModel):
     session_id: str
     schedule: list[ScheduleEntry]
     config: UserConfig
+    calendar_synced: bool = True
+    calendar_error: str | None = None
 
 
 class AdjustRequest(BaseModel):
-    session_id: str
-    change: str
+    session_id: str = Field(max_length=64)
+    change: str = Field(min_length=1, max_length=1000)
 
 
 class AdjustResponse(BaseModel):
@@ -83,13 +85,13 @@ class AdjustResponse(BaseModel):
 def auth_google():
     """Redirect the user to Google's OAuth consent screen."""
     try:
-        creds_file = credentials_source()
+        client_config = credentials_config()
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     from google_auth_oauthlib.flow import Flow
-    flow = Flow.from_client_secrets_file(
-        creds_file,
+    flow = Flow.from_client_config(
+        client_config,
         scopes=SCOPES,
         redirect_uri=f"{_base_url()}/auth/callback",
     )
@@ -115,13 +117,13 @@ def auth_callback(code: str, state: str = ""):
     # Extract verifier from composite state "<verifier>.<csrf>"
     code_verifier = state.split(".", 1)[0] if state and "." in state else None
     try:
-        creds_file = credentials_source()
+        client_config = credentials_config()
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     from google_auth_oauthlib.flow import Flow
-    flow = Flow.from_client_secrets_file(
-        creds_file,
+    flow = Flow.from_client_config(
+        client_config,
         scopes=SCOPES,
         redirect_uri=f"{_base_url()}/auth/callback",
     )
@@ -137,11 +139,16 @@ def auth_status():
 
 
 @app.get("/api/token")
-def get_token():
+def get_token(key: str = ""):
     """
-    Return the current token JSON so the user can set it as GOOGLE_TOKEN_JSON
-    on Render to survive restarts. Only useful after a successful OAuth flow.
+    One-time export of the token JSON (to set GOOGLE_TOKEN_JSON on Render).
+    Disabled unless the TOKEN_EXPORT_KEY env var is set; caller must pass
+    the matching ?key= value. Never leave TOKEN_EXPORT_KEY set permanently.
     """
+    export_key = os.getenv("TOKEN_EXPORT_KEY")
+    if not export_key or not _secrets.compare_digest(key, export_key):
+        raise HTTPException(status_code=404, detail="Not found")
+
     from scheduler.data.providers.google_auth import _token_json
     raw = _token_json()
     if not raw:
@@ -157,7 +164,7 @@ def build_schedule(req: ScheduleRequest):
         raise HTTPException(status_code=401, detail="not_authorized")
 
     try:
-        schedule, user_config = pipeline.invoke(req.goals)
+        schedule, user_config, calendar_error = pipeline.invoke(req.goals)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -168,6 +175,8 @@ def build_schedule(req: ScheduleRequest):
         session_id=session_id,
         schedule=schedule,
         config=user_config,
+        calendar_synced=calendar_error is None,
+        calendar_error=calendar_error,
     )
 
 

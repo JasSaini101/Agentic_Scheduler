@@ -21,6 +21,16 @@ import scheduler.agents.sport_agent as sport_agent
 import scheduler.agents.fill_agent as fill_agent
 
 
+class CalendarWriteError(RuntimeError):
+    """Raised when the schedule was built but writing to Google Calendar failed.
+
+    Carries the built schedule so callers can still show it to the user."""
+
+    def __init__(self, schedule: list[ScheduleEntry], message: str):
+        super().__init__(message)
+        self.schedule = schedule
+
+
 def _build_blocked_ranges(entries: list[ScheduleEntry]) -> list[dict]:
     """Convert confirmed entries into a list of blocked hour ranges for agents to check."""
     return [
@@ -104,9 +114,11 @@ def run(user_config: UserConfig | None = None) -> list[ScheduleEntry]:
     try:
         from scheduler.data.providers.calendar_writer import write_schedule
         write_schedule(all_entries, calendar_id)
-    except BaseException as exc:
-        import warnings
-        warnings.warn(f"[orchestrator] Google Calendar write failed ({exc}); schedule printed to console only")
+    except Exception as exc:
+        raise CalendarWriteError(
+            all_entries,
+            f"Schedule built, but writing to Google Calendar failed: {exc}",
+        ) from exc
 
     return all_entries
 

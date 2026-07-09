@@ -13,7 +13,9 @@ def main():
         return
 
     print("\n[main] Parsing goals and building schedule...")
-    schedule, user_config = pipeline.invoke(goals)
+    schedule, user_config, calendar_error = pipeline.invoke(goals)
+    if calendar_error:
+        print(f"\n⚠️  {calendar_error}")
 
     print("\n")
     change = input("Any changes? (press Enter to skip) ").strip()
