@@ -72,7 +72,7 @@ def _print_schedule(schedule: list[ScheduleEntry]) -> None:
     print("\n" + "═" * 52)
 
 
-def run(user_config: UserConfig | None = None) -> list[ScheduleEntry]:
+def run(user_config: UserConfig | None = None, write_calendar: bool = True) -> list[ScheduleEntry]:
     all_entries: list[ScheduleEntry] = []
 
     week_context = build_week_context()
@@ -109,7 +109,10 @@ def run(user_config: UserConfig | None = None) -> list[ScheduleEntry]:
     # ── Print final schedule ──────────────────────────────────────────────────
     _print_schedule(all_entries)
 
-    # ── Write to Google Calendar ──────────────────────────────────────────────
+    # ── Write to Google Calendar (skipped in preview/confirm flows) ───────────
+    if not write_calendar:
+        return all_entries
+
     calendar_id = user_config.calendar_id if user_config else "primary"
     try:
         from scheduler.data.providers.calendar_writer import write_schedule

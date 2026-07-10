@@ -80,12 +80,18 @@ def _score_slots(
     duration: float,
     candidate_hours: list[int],
     blocked: list[dict],
+    days: list[str] = DAYS,
+    pinned: bool = False,
 ) -> list[TimeSlot]:
     slots: list[TimeSlot] = []
-    for day in DAYS:
+    for day in days:
         w_score, w_reason = _weather_score(day)
         if w_score < 0:
-            continue
+            if not pinned:
+                continue
+            # User explicitly asked for this day — schedule it, but flag the weather
+            w_score = 0.0
+            w_reason += " — scheduled anyway at your request"
         for hour in candidate_hours:
             if _is_blocked(day, hour, blocked, duration):
                 continue
@@ -141,7 +147,10 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
 
     for target in sport_targets:
         candidate_hours = target.candidate_hours if target.candidate_hours else SPORT_CANDIDATE_HOURS
-        slots = _score_slots(target.duration_hours, candidate_hours, blocked)
+        # Respect a day pin (e.g. "tennis on Saturday") by only scoring that day
+        target_days = [target.day] if target.day else DAYS
+        slots = _score_slots(target.duration_hours, candidate_hours, blocked, target_days,
+                             pinned=target.day is not None)
 
         placed = 0
         for slot in slots:

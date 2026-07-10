@@ -7,6 +7,7 @@ class ActivityTarget(BaseModel):
     duration_hours: float
     candidate_hours: list[int] = []
     category: str   # "gym" | "sport" | "fill"
+    day: str | None = None   # pin to a specific day (e.g. "Friday"); None = any day
 
 
 class UserConfig(BaseModel):

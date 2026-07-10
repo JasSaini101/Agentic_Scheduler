@@ -82,8 +82,10 @@ def _check_rate_limit(request: Request) -> None:
 
 # ── Session store (write-through to disk so uvicorn/Render process restarts
 #    within the same container don't lose active schedules) ─────────────────
+# session_id → (schedule, user_config, confirmed)
+# confirmed=False means the schedule is a proposal not yet written to Calendar.
 
-_sessions: dict[str, tuple[list[ScheduleEntry], UserConfig]] = {}
+_sessions: dict[str, tuple[list[ScheduleEntry], UserConfig, bool]] = {}
 _SESSIONS_FILE = Path(tempfile.gettempdir()) / "agentic_scheduler_sessions.json"
 
 
@@ -93,8 +95,9 @@ def _persist_sessions() -> None:
             sid: {
                 "schedule": [e.model_dump() for e in schedule],
                 "config": config.model_dump(),
+                "confirmed": confirmed,
             }
-            for sid, (schedule, config) in _sessions.items()
+            for sid, (schedule, config, confirmed) in _sessions.items()
         }
         _SESSIONS_FILE.write_text(json.dumps(data))
     except OSError as exc:
@@ -109,7 +112,7 @@ def _load_sessions() -> None:
         for sid, payload in data.items():
             schedule = [ScheduleEntry.model_validate(e) for e in payload["schedule"]]
             config = UserConfig.model_validate(payload["config"])
-            _sessions[sid] = (schedule, config)
+            _sessions[sid] = (schedule, config, payload.get("confirmed", True))
         logger.info("Restored %d session(s) from disk", len(_sessions))
     except Exception as exc:
         logger.warning("Could not restore sessions: %s", exc)
@@ -152,6 +155,7 @@ class ScheduleResponse(BaseModel):
     session_id: str
     schedule: list[ScheduleEntry]
     config: UserConfig
+    confirmed: bool = False   # proposal only — nothing written until /api/confirm
     calendar_synced: bool = True
     calendar_error: str | None = None
 
@@ -163,6 +167,16 @@ class AdjustRequest(BaseModel):
 
 class AdjustResponse(BaseModel):
     schedule: list[ScheduleEntry]
+    confirmed: bool = False
+
+
+class ConfirmRequest(BaseModel):
+    session_id: str = Field(max_length=64)
+
+
+class ConfirmResponse(BaseModel):
+    confirmed: bool
+    events_written: int
 
 
 # ── Google OAuth routes ────────────────────────────────────────────────────
@@ -251,7 +265,11 @@ def build_schedule(req: ScheduleRequest, request: Request):
     _check_rate_limit(request)
 
     try:
-        schedule, user_config, calendar_error = pipeline.invoke(req.goals)
+        # Preview mode: build the proposal without touching Google Calendar.
+        # Events are written only when the user confirms via /api/confirm.
+        schedule, user_config, calendar_error = pipeline.invoke(
+            {"goals": req.goals, "write_calendar": False}
+        )
     except Exception:
         logger.exception("Schedule build failed")
         raise HTTPException(
@@ -260,16 +278,44 @@ def build_schedule(req: ScheduleRequest, request: Request):
         )
 
     session_id = str(uuid.uuid4())
-    _sessions[session_id] = (schedule, user_config)
+    _sessions[session_id] = (schedule, user_config, False)
     _persist_sessions()
 
     return ScheduleResponse(
         session_id=session_id,
         schedule=schedule,
         config=user_config,
+        confirmed=False,
         calendar_synced=calendar_error is None,
         calendar_error=calendar_error,
     )
+
+
+@app.post("/api/confirm", response_model=ConfirmResponse)
+def confirm_schedule(req: ConfirmRequest):
+    if req.session_id not in _sessions:
+        raise HTTPException(
+            status_code=404,
+            detail="Session expired — please rebuild your schedule.",
+        )
+
+    schedule, user_config, _ = _sessions[req.session_id]
+
+    try:
+        from scheduler.data.providers.calendar_writer import write_schedule
+        write_schedule(schedule, user_config.calendar_id)
+    except Exception:
+        logger.exception("Calendar write failed on confirm")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not write to Google Calendar. Check your connection and try again.",
+        )
+
+    _sessions[req.session_id] = (schedule, user_config, True)
+    _persist_sessions()
+
+    written = sum(1 for e in schedule if e.category != "hard_block")
+    return ConfirmResponse(confirmed=True, events_written=written)
 
 
 @app.post("/api/adjust", response_model=AdjustResponse)
@@ -281,10 +327,12 @@ def adjust_schedule(req: AdjustRequest, request: Request):
         )
     _check_rate_limit(request)
 
-    schedule, user_config = _sessions[req.session_id]
+    schedule, user_config, confirmed = _sessions[req.session_id]
 
     try:
-        updated = apply_adjustment(req.change, schedule, user_config)
+        # Before confirmation nothing is on the calendar, so edit in memory only;
+        # after confirmation keep Google Calendar in sync with each change.
+        updated = apply_adjustment(req.change, schedule, user_config, sync_calendar=confirmed)
     except Exception:
         logger.exception("Adjustment failed")
         raise HTTPException(
@@ -292,17 +340,17 @@ def adjust_schedule(req: AdjustRequest, request: Request):
             detail="Could not apply that change. Try rephrasing it.",
         )
 
-    _sessions[req.session_id] = (updated, user_config)
+    _sessions[req.session_id] = (updated, user_config, confirmed)
     _persist_sessions()
-    return AdjustResponse(schedule=updated)
+    return AdjustResponse(schedule=updated, confirmed=confirmed)
 
 
 @app.get("/api/schedule/{session_id}")
 def get_schedule(session_id: str):
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    schedule, config = _sessions[session_id]
-    return {"schedule": schedule, "config": config}
+    schedule, config, confirmed = _sessions[session_id]
+    return {"schedule": schedule, "config": config, "confirmed": confirmed}
 
 
 # ── Static files & SPA fallback ───────────────────────────────────────────

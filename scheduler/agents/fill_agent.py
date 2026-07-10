@@ -74,7 +74,11 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
                     "label": t.name.title(),
                     "total_hours": total,
                     "chunk_hours": chunk,
-                    "reason": f"Weekly goal: {total:.0f}h total",
+                    "day": t.day,   # pin to a specific day, or None for any
+                    "reason": (
+                        f"Pinned to {t.day}" if t.day
+                        else f"Weekly goal: {total:.0f}h total"
+                    ),
                 })
         else:
             activities = list(FILL_ACTIVITIES)
@@ -119,6 +123,9 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
             for activity in activities:
                 label = activity["label"]
                 if remaining.get(label, 0) <= 0:
+                    continue
+                # Day-pinned activities only go on their requested day
+                if activity.get("day") and activity["day"] != day:
                     continue
 
                 if _is_quota_based(activity):
