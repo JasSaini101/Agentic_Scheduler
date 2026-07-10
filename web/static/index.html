@@ -326,10 +326,10 @@ function setStatus(msg, isError = false) {
 }
 
 function fmt(h) {
-  const hr = Math.floor(h);
-  const mn = Math.round((h - hr) * 60);
+  const hr = ((Math.floor(h) % 24) + 24) % 24;
+  const mn = Math.round((h - Math.floor(h)) * 60);
   const suffix = hr < 12 ? "am" : "pm";
-  const disp = ((hr - 1) % 12) + 1;
+  const disp = hr % 12 || 12;   // 0 → 12am, 12 → 12pm
   return mn === 0 ? `${disp}${suffix}` : `${disp}:${mn.toString().padStart(2,"0")}${suffix}`;
 }
 
@@ -515,6 +515,13 @@ async function applyAdjustment() {
       body: JSON.stringify({ session_id: sessionId, change }),
     });
     const data = await res.json();
+    if (res.status === 404) {
+      // Session lost (server restart) — reset UI so the user rebuilds
+      sessionId = null;
+      adjustBar.classList.remove("visible");
+      setStatus("Your session expired — please rebuild your schedule.", true);
+      return;
+    }
     if (!res.ok) throw new Error(data.detail || "Unknown error");
 
     renderCalendar(data.schedule);

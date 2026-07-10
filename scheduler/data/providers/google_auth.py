@@ -70,7 +70,12 @@ def get_credentials():
 
     if not creds.valid:
         if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                # Revoked/expired token or network failure — treat as signed out
+                # so the UI shows "connect your calendar" instead of a raw 500.
+                raise RuntimeError("not_authorized") from exc
             save_token(creds.to_json())
         else:
             raise RuntimeError("not_authorized")
