@@ -11,6 +11,7 @@ Actions produced by the LLM:
 
 import os
 import warnings
+from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
@@ -35,6 +36,7 @@ Return ONLY a JSON array of action objects, no other text.\
 """
 
 
+@lru_cache(maxsize=1)
 def _build_chain():
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:

@@ -7,7 +7,7 @@ validated output — no manual JSON parsing or markdown-fence stripping needed.
 """
 
 import os
-from typing import Optional
+from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
@@ -50,6 +50,7 @@ class _ParsedConfig(BaseModel):
     fill_window: list[int] = [8, 22]
 
 
+@lru_cache(maxsize=1)
 def _build_chain():
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:

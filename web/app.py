@@ -5,9 +5,14 @@ Agentic Scheduler — FastAPI Web Backend
 import uuid
 import sys
 import os
+import json
+import time
 import hashlib
 import base64
+import logging
+import tempfile
 import secrets as _secrets
+from collections import defaultdict, deque
 from pathlib import Path
 
 # Ensure project root is on the path
@@ -16,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -27,10 +32,91 @@ from scheduler.llm.pipeline import pipeline
 from scheduler.llm.adjustment_handler import apply as apply_adjustment
 from scheduler.data.providers.google_auth import SCOPES, credentials_config, save_token
 
+logger = logging.getLogger("agentic_scheduler")
+logging.basicConfig(level=logging.INFO)
+
 app = FastAPI(title="Agentic Scheduler")
 
-# In-memory session store: session_id → (schedule, user_config)
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    # index.html uses inline <script>/<style>, so allow inline for self only
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; frame-ancestors 'none'"
+    )
+    return response
+
+
+# ── Rate limiting (per-IP sliding window on LLM-backed endpoints) ──────────
+
+RATE_LIMIT_CALLS = 10          # max LLM requests…
+RATE_LIMIT_WINDOW = 600        # …per 10 minutes per client
+_rate_buckets: dict[str, deque] = defaultdict(deque)
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(request: Request) -> None:
+    now = time.monotonic()
+    bucket = _rate_buckets[_client_ip(request)]
+    while bucket and now - bucket[0] > RATE_LIMIT_WINDOW:
+        bucket.popleft()
+    if len(bucket) >= RATE_LIMIT_CALLS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests — please wait a few minutes and try again.",
+        )
+    bucket.append(now)
+
+
+# ── Session store (write-through to disk so uvicorn/Render process restarts
+#    within the same container don't lose active schedules) ─────────────────
+
 _sessions: dict[str, tuple[list[ScheduleEntry], UserConfig]] = {}
+_SESSIONS_FILE = Path(tempfile.gettempdir()) / "agentic_scheduler_sessions.json"
+
+
+def _persist_sessions() -> None:
+    try:
+        data = {
+            sid: {
+                "schedule": [e.model_dump() for e in schedule],
+                "config": config.model_dump(),
+            }
+            for sid, (schedule, config) in _sessions.items()
+        }
+        _SESSIONS_FILE.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.warning("Could not persist sessions: %s", exc)
+
+
+def _load_sessions() -> None:
+    if not _SESSIONS_FILE.exists():
+        return
+    try:
+        data = json.loads(_SESSIONS_FILE.read_text())
+        for sid, payload in data.items():
+            schedule = [ScheduleEntry.model_validate(e) for e in payload["schedule"]]
+            config = UserConfig.model_validate(payload["config"])
+            _sessions[sid] = (schedule, config)
+        logger.info("Restored %d session(s) from disk", len(_sessions))
+    except Exception as exc:
+        logger.warning("Could not restore sessions: %s", exc)
+
+
+_load_sessions()
+
 
 def _pkce_pair() -> tuple[str, str]:
     """Return (code_verifier, code_challenge) for PKCE S256."""
@@ -159,17 +245,23 @@ def get_token(key: str = ""):
 # ── Schedule endpoints ─────────────────────────────────────────────────────
 
 @app.post("/api/schedule", response_model=ScheduleResponse)
-def build_schedule(req: ScheduleRequest):
+def build_schedule(req: ScheduleRequest, request: Request):
     if not _is_authorized():
         raise HTTPException(status_code=401, detail="not_authorized")
+    _check_rate_limit(request)
 
     try:
         schedule, user_config, calendar_error = pipeline.invoke(req.goals)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        logger.exception("Schedule build failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not build the schedule. Try rephrasing your goals.",
+        )
 
     session_id = str(uuid.uuid4())
     _sessions[session_id] = (schedule, user_config)
+    _persist_sessions()
 
     return ScheduleResponse(
         session_id=session_id,
@@ -181,18 +273,27 @@ def build_schedule(req: ScheduleRequest):
 
 
 @app.post("/api/adjust", response_model=AdjustResponse)
-def adjust_schedule(req: AdjustRequest):
+def adjust_schedule(req: AdjustRequest, request: Request):
     if req.session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Session expired — please rebuild your schedule.",
+        )
+    _check_rate_limit(request)
 
     schedule, user_config = _sessions[req.session_id]
 
     try:
         updated = apply_adjustment(req.change, schedule, user_config)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        logger.exception("Adjustment failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not apply that change. Try rephrasing it.",
+        )
 
     _sessions[req.session_id] = (updated, user_config)
+    _persist_sessions()
     return AdjustResponse(schedule=updated)
 
 
