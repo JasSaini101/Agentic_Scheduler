@@ -10,12 +10,15 @@ Each piece maps to a future data source:
 from datetime import date, time, timedelta
 
 # ── Week definition ───────────────────────────────────────────────────────────
-# Start date for the schedule — always the Monday of the current week
-def _this_monday() -> date:
+# Start date for the schedule — always the Monday of the current week.
+# Use current_week_start() at call time; a long-lived server process would
+# otherwise freeze the week at whatever it was when the module was imported.
+def current_week_start() -> date:
     today = date.today()
     return today - timedelta(days=today.weekday())
 
-WEEK_START = _this_monday()
+# Legacy alias — frozen at import time; prefer current_week_start()
+WEEK_START = current_week_start()
 
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 

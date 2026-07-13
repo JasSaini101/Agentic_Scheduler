@@ -120,6 +120,33 @@
   }
   #status.error { color: #f87171; }
 
+  /* ── Week navigation ── */
+  #week-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 24px 4px;
+    flex-wrap: wrap;
+  }
+  #week-nav button {
+    padding: 5px 12px;
+    font-size: 13px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  #week-nav button:hover { background: #2a2e3f; }
+  #wk-label {
+    font-size: 14px;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  #wk-note {
+    font-size: 12px;
+    color: var(--c-fill);
+    margin-left: 8px;
+  }
+
   /* ── Calendar grid ── */
   #calendar {
     padding: 0 24px 40px;
@@ -148,6 +175,20 @@
     z-index: 10;
   }
   .day-header.corner { /* time column label */ }
+  .day-header .dh-date { display: block; font-size: 15px; color: var(--text); margin-top: 2px; }
+  .day-header.today { color: var(--accent); }
+  .day-header.today .dh-date {
+    color: #fff;
+    background: var(--accent);
+    border-radius: 99px;
+    width: 24px; height: 24px;
+    line-height: 24px;
+    margin: 2px auto 0;
+  }
+
+  /* Days already in the past are dimmed */
+  .day-col.past .event-block { opacity: 0.45; }
+  .day-header.past { opacity: 0.55; }
 
   /* Time rows */
   .time-col {
@@ -300,6 +341,14 @@
 
 <div id="status">Enter your weekly goals above to get started.</div>
 
+<div id="week-nav">
+  <button id="wk-prev" title="Previous week">‹</button>
+  <button id="wk-today">Today</button>
+  <button id="wk-next" title="Next week">›</button>
+  <span id="wk-label"></span>
+  <span id="wk-note"></span>
+</div>
+
 <div id="legend">
   <div class="legend-item"><div class="legend-dot" style="background:var(--c-gym)"></div>Gym</div>
   <div class="legend-item"><div class="legend-dot" style="background:var(--c-sport)"></div>Sport</div>
@@ -329,6 +378,35 @@ const PX_PER_HR  = 56;
 let sessionId = null;
 let calendarAuthorized = false;
 let scheduleConfirmed = false;
+let currentSchedule = [];          // last schedule received from the API
+let scheduleWeekStart = null;      // ISO Monday the schedule applies to
+let viewedMonday = mondayOf(new Date());   // Monday of the week being viewed
+
+// ── Date helpers ──────────────────────────────────────────────────────────
+function mondayOf(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (x.getDay() + 6) % 7;   // Mon=0 … Sun=6
+  x.setDate(x.getDate() - dow);
+  return x;
+}
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+function isoDate(d) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function weekLabel(mon) {
+  const sun = addDays(mon, 6);
+  const left = `${MONTHS[mon.getMonth()]} ${mon.getDate()}`;
+  const right = mon.getMonth() === sun.getMonth()
+    ? `${sun.getDate()}`
+    : `${MONTHS[sun.getMonth()]} ${sun.getDate()}`;
+  return `${left} – ${right}, ${sun.getFullYear()}`;
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const goalsInput     = document.getElementById("goals-input");
@@ -345,6 +423,11 @@ const legend         = document.getElementById("legend");
 const tooltip        = document.getElementById("tooltip");
 const authBanner     = document.getElementById("auth-banner");
 const authIndicator  = document.getElementById("auth-indicator");
+const wkPrev         = document.getElementById("wk-prev");
+const wkNext         = document.getElementById("wk-next");
+const wkToday        = document.getElementById("wk-today");
+const wkLabel        = document.getElementById("wk-label");
+const wkNote         = document.getElementById("wk-note");
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function setStatus(msg, isError = false) {
@@ -386,9 +469,31 @@ function hideTooltip(e) {
 }
 
 // ── Render calendar ───────────────────────────────────────────────────────
-function renderCalendar(schedule) {
+function setSchedule(schedule, weekStartIso) {
+  currentSchedule = schedule || [];
+  if (weekStartIso) scheduleWeekStart = weekStartIso;
+  viewedMonday = scheduleWeekStart
+    ? mondayOf(new Date(scheduleWeekStart + "T00:00:00"))
+    : mondayOf(new Date());
+  renderCalendar();
+}
+
+function renderCalendar() {
   calEl.innerHTML = "";
   legend.classList.add("visible");
+
+  // Week nav label + note
+  wkLabel.textContent = weekLabel(viewedMonday);
+  const viewedIso = isoDate(viewedMonday);
+  const onScheduleWeek = scheduleWeekStart === viewedIso;
+  wkNote.textContent =
+    scheduleWeekStart && !onScheduleWeek
+      ? `Your schedule is on the week of ${weekLabel(mondayOf(new Date(scheduleWeekStart + "T00:00:00")))}`
+      : "";
+
+  const schedule = onScheduleWeek ? currentSchedule : [];
+  const today = new Date();
+  const todayIso = isoDate(today);
 
   const totalHeight = HOURS * PX_PER_HR;
   const grid = document.createElement("div");
@@ -399,10 +504,19 @@ function renderCalendar(schedule) {
   corner.className = "day-header corner";
   grid.appendChild(corner);
 
+  const dayDates = DAYS.map((_, i) => addDays(viewedMonday, i));
+
   DAYS.forEach((d, i) => {
     const h = document.createElement("div");
-    h.className = "day-header";
+    const dIso = isoDate(dayDates[i]);
+    h.className = "day-header"
+      + (dIso === todayIso ? " today" : "")
+      + (dIso < todayIso ? " past" : "");
     h.textContent = DAY_SHORT[i];
+    const dateEl = document.createElement("span");
+    dateEl.className = "dh-date";
+    dateEl.textContent = dayDates[i].getDate();
+    h.appendChild(dateEl);
     grid.appendChild(h);
   });
 
@@ -419,9 +533,10 @@ function renderCalendar(schedule) {
   grid.appendChild(timeCol);
 
   // Day columns
-  DAYS.forEach(day => {
+  DAYS.forEach((day, di) => {
     const col = document.createElement("div");
-    col.className = "day-col";
+    const dIso = isoDate(dayDates[di]);
+    col.className = "day-col" + (dIso < todayIso ? " past" : "");
     col.style.height = totalHeight + "px";
 
     // Hour lines
@@ -485,6 +600,7 @@ async function checkAuth() {
 
 // Check auth on load; also handle ?authorized=1 redirect from OAuth callback
 checkAuth();
+renderCalendar();   // show the dated week grid immediately, even before a schedule
 if (new URLSearchParams(location.search).get("authorized") === "1") {
   history.replaceState({}, "", "/");
 }
@@ -514,7 +630,7 @@ async function buildSchedule() {
 
     sessionId = data.session_id;
     scheduleConfirmed = false;
-    renderCalendar(data.schedule);
+    setSchedule(data.schedule, data.week_start);
     confirmBar.classList.add("visible");
     adjustBar.classList.remove("visible");
     setStatus(`Proposed schedule — ${data.schedule.length} events. Review it below, then confirm or request changes.`);
@@ -550,7 +666,7 @@ async function applyAdjustment() {
     }
     if (!res.ok) throw new Error(data.detail || "Unknown error");
 
-    renderCalendar(data.schedule);
+    setSchedule(data.schedule);
     adjustInput.value = "";
     if (scheduleConfirmed) {
       setStatus(`Adjustment applied and synced to your calendar — ${data.schedule.length} events across the week.`);
@@ -613,6 +729,10 @@ goalsInput.addEventListener("keydown", e => { if (e.key === "Enter") buildSchedu
 
 confirmBtn.addEventListener("click", confirmSchedule);
 denyBtn.addEventListener("click", denySchedule);
+
+wkPrev.addEventListener("click", () => { viewedMonday = addDays(viewedMonday, -7); renderCalendar(); });
+wkNext.addEventListener("click", () => { viewedMonday = addDays(viewedMonday, 7); renderCalendar(); });
+wkToday.addEventListener("click", () => { viewedMonday = mondayOf(new Date()); renderCalendar(); });
 
 adjustBtn.addEventListener("click", applyAdjustment);
 adjustInput.addEventListener("keydown", e => { if (e.key === "Enter") applyAdjustment(); });
