@@ -17,6 +17,16 @@ def current_week_start() -> date:
     today = date.today()
     return today - timedelta(days=today.weekday())
 
+
+def date_for_day(day_name: str, today: date | None = None) -> date:
+    """Resolve a day name to its NEXT occurrence on or after today.
+
+    The scheduler works on a rolling 7-day window: "Friday" always means the
+    upcoming Friday (or today, if today is Friday) — never a day already past."""
+    today = today or date.today()
+    delta = (DAYS.index(day_name) - today.weekday()) % 7
+    return today + timedelta(days=delta)
+
 # Legacy alias — frozen at import time; prefer current_week_start()
 WEEK_START = current_week_start()
 

@@ -23,7 +23,7 @@ from datetime import timedelta
 
 import requests
 
-from scheduler.data.mock_week import DAYS, current_week_start
+from scheduler.data.mock_week import DAYS, date_for_day
 
 
 _API_BASE = "https://api.openweathermap.org/data/2.5/forecast"
@@ -80,9 +80,8 @@ def fetch_weather() -> dict:
         day_slots[date_str].append((_owm_id_to_condition(weather_id), temp_k))
 
     result = {}
-    week_start = current_week_start()
-    for i, day_name in enumerate(DAYS):
-        date_key = (week_start + timedelta(days=i)).isoformat()
+    for day_name in DAYS:
+        date_key = date_for_day(day_name).isoformat()
         slots = day_slots.get(date_key)
         if not slots:
             continue
