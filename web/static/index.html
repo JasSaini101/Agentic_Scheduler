@@ -368,7 +368,10 @@
 <script>
 // ── Config ───────────────────────────────────────────────────────────────
 const DAYS   = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-const DAY_SHORT = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+// Grid columns run Sunday-first (US convention) so today sits at the start
+// of the current week instead of the end
+const COL_DAYS  = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const COL_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const HOUR_START = 6;
 const HOUR_END   = 22;
 const HOURS      = HOUR_END - HOUR_START; // 16
@@ -381,7 +384,7 @@ let scheduleConfirmed = false;
 let currentSchedule = [];          // last schedule received from the API
 let scheduleWeekStart = null;      // ISO Monday the schedule applies to
 let scheduleDayDates = {};         // day name → ISO date (rolling 7-day window)
-let viewedMonday = mondayOf(new Date());   // Monday of the week being viewed
+let viewedWeekStart = weekStartOf(new Date());   // Sunday of the week being viewed
 
 // Fallback: next occurrence of a day name on/after today (matches backend rule)
 function nextOccurrenceIso(dayName) {
@@ -392,10 +395,10 @@ function nextOccurrenceIso(dayName) {
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────
-function mondayOf(d) {
+function weekStartOf(d) {
+  // Sunday of the week containing d
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dow = (x.getDay() + 6) % 7;   // Mon=0 … Sun=6
-  x.setDate(x.getDate() - dow);
+  x.setDate(x.getDate() - x.getDay());
   return x;
 }
 function addDays(d, n) {
@@ -488,7 +491,7 @@ function setSchedule(schedule, weekStartIso, dayDates) {
     scheduleDayDates = {};
     DAYS.forEach(d => { scheduleDayDates[d] = nextOccurrenceIso(d); });
   }
-  viewedMonday = mondayOf(new Date());
+  viewedWeekStart = weekStartOf(new Date());
   renderCalendar();
 }
 
@@ -497,15 +500,15 @@ function renderCalendar() {
   legend.classList.add("visible");
 
   // Week nav label
-  wkLabel.textContent = weekLabel(viewedMonday);
+  wkLabel.textContent = weekLabel(viewedWeekStart);
 
   const schedule = currentSchedule;
   const today = new Date();
   const todayIso = isoDate(today);
 
   // Note when the schedule exists but none of its days fall in the viewed week
-  const viewStart = isoDate(viewedMonday);
-  const viewEnd = isoDate(addDays(viewedMonday, 6));
+  const viewStart = isoDate(viewedWeekStart);
+  const viewEnd = isoDate(addDays(viewedWeekStart, 6));
   const usedDates = schedule.map(e => scheduleDayDates[e.day]).filter(Boolean).sort();
   const anyVisible = usedDates.some(d => d >= viewStart && d <= viewEnd);
   wkNote.textContent =
@@ -522,15 +525,15 @@ function renderCalendar() {
   corner.className = "day-header corner";
   grid.appendChild(corner);
 
-  const colDates = DAYS.map((_, i) => addDays(viewedMonday, i));
+  const colDates = COL_DAYS.map((_, i) => addDays(viewedWeekStart, i));
 
-  DAYS.forEach((d, i) => {
+  COL_DAYS.forEach((d, i) => {
     const h = document.createElement("div");
     const dIso = isoDate(colDates[i]);
     h.className = "day-header"
       + (dIso === todayIso ? " today" : "")
       + (dIso < todayIso ? " past" : "");
-    h.textContent = DAY_SHORT[i];
+    h.textContent = COL_SHORT[i];
     const dateEl = document.createElement("span");
     dateEl.className = "dh-date";
     dateEl.textContent = colDates[i].getDate();
@@ -551,7 +554,7 @@ function renderCalendar() {
   grid.appendChild(timeCol);
 
   // Day columns
-  DAYS.forEach((day, di) => {
+  COL_DAYS.forEach((day, di) => {
     const col = document.createElement("div");
     const dIso = isoDate(colDates[di]);
     col.className = "day-col" + (dIso < todayIso ? " past" : "");
@@ -749,9 +752,9 @@ goalsInput.addEventListener("keydown", e => { if (e.key === "Enter") buildSchedu
 confirmBtn.addEventListener("click", confirmSchedule);
 denyBtn.addEventListener("click", denySchedule);
 
-wkPrev.addEventListener("click", () => { viewedMonday = addDays(viewedMonday, -7); renderCalendar(); });
-wkNext.addEventListener("click", () => { viewedMonday = addDays(viewedMonday, 7); renderCalendar(); });
-wkToday.addEventListener("click", () => { viewedMonday = mondayOf(new Date()); renderCalendar(); });
+wkPrev.addEventListener("click", () => { viewedWeekStart = addDays(viewedWeekStart, -7); renderCalendar(); });
+wkNext.addEventListener("click", () => { viewedWeekStart = addDays(viewedWeekStart, 7); renderCalendar(); });
+wkToday.addEventListener("click", () => { viewedWeekStart = weekStartOf(new Date()); renderCalendar(); });
 
 adjustBtn.addEventListener("click", applyAdjustment);
 adjustInput.addEventListener("keydown", e => { if (e.key === "Enter") applyAdjustment(); });
