@@ -111,10 +111,12 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
     gym_duration = gym_target.duration_hours if gym_target else _DEFAULT_GYM_DURATION
     top_n = gym_target.sessions_per_week if gym_target else _DEFAULT_TOP_N
     candidate_hours = gym_target.candidate_hours if gym_target else GYM_CANDIDATE_HOURS
+    # Respect a day pin (e.g. "gym on Friday") by only considering that day
+    days = [gym_target.day] if gym_target and gym_target.day else DAYS
 
     slots: list[TimeSlot] = []
 
-    for day in DAYS:
+    for day in days:
         for hour in candidate_hours:
             if _is_blocked(day, hour, blocked, gym_duration):
                 continue

@@ -94,6 +94,23 @@
   #adjust-bar.visible { display: flex; }
   #adjust-bar span { color: var(--muted); white-space: nowrap; }
 
+  /* ── Confirm bar (proposed schedule review) ── */
+  #confirm-bar {
+    display: none;
+    padding: 12px 24px;
+    background: #14231a;
+    border-bottom: 1px solid #166534;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #confirm-bar.visible { display: flex; }
+  #confirm-bar span { flex: 1; font-size: 13px; color: #86efac; }
+  #confirm-btn { background: #16a34a; }
+  #confirm-btn:hover { background: #22c55e; }
+  #deny-btn { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  #deny-btn:hover { background: #2a2e3f; }
+
   /* ── Status / error ── */
   #status {
     padding: 10px 24px;
@@ -266,6 +283,12 @@
   <div id="auth-indicator" class="no">Calendar: not connected</div>
 </header>
 
+<div id="confirm-bar">
+  <span>This is a proposed schedule — nothing has been written to your calendar yet.</span>
+  <button id="confirm-btn">✓ Confirm &amp; write to calendar</button>
+  <button id="deny-btn">✗ Request changes</button>
+</div>
+
 <div id="adjust-bar">
   <span>Make a change:</span>
   <div class="input-row">
@@ -305,10 +328,14 @@ const PX_PER_HR  = 56;
 // ── State ─────────────────────────────────────────────────────────────────
 let sessionId = null;
 let calendarAuthorized = false;
+let scheduleConfirmed = false;
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const goalsInput     = document.getElementById("goals-input");
 const buildBtn       = document.getElementById("build-btn");
+const confirmBar     = document.getElementById("confirm-bar");
+const confirmBtn     = document.getElementById("confirm-btn");
+const denyBtn        = document.getElementById("deny-btn");
 const adjustBar      = document.getElementById("adjust-bar");
 const adjustInput    = document.getElementById("adjust-input");
 const adjustBtn      = document.getElementById("adjust-btn");
@@ -486,13 +513,11 @@ async function buildSchedule() {
     if (!res.ok) throw new Error(data.detail || "Unknown error");
 
     sessionId = data.session_id;
+    scheduleConfirmed = false;
     renderCalendar(data.schedule);
-    adjustBar.classList.add("visible");
-    if (data.calendar_synced === false) {
-      setStatus(`Schedule built, but Google Calendar sync failed — events were NOT written to your calendar. (${data.calendar_error || "unknown error"})`, true);
-    } else {
-      setStatus(`Schedule built — ${data.schedule.length} events across the week.`);
-    }
+    confirmBar.classList.add("visible");
+    adjustBar.classList.remove("visible");
+    setStatus(`Proposed schedule — ${data.schedule.length} events. Review it below, then confirm or request changes.`);
   } catch (err) {
     setStatus("Error: " + err.message, true);
   } finally {
@@ -519,6 +544,7 @@ async function applyAdjustment() {
       // Session lost (server restart) — reset UI so the user rebuilds
       sessionId = null;
       adjustBar.classList.remove("visible");
+      confirmBar.classList.remove("visible");
       setStatus("Your session expired — please rebuild your schedule.", true);
       return;
     }
@@ -526,7 +552,13 @@ async function applyAdjustment() {
 
     renderCalendar(data.schedule);
     adjustInput.value = "";
-    setStatus(`Adjustment applied — ${data.schedule.length} events across the week.`);
+    if (scheduleConfirmed) {
+      setStatus(`Adjustment applied and synced to your calendar — ${data.schedule.length} events across the week.`);
+    } else {
+      // Still a proposal — show the updated version for another review round
+      confirmBar.classList.add("visible");
+      setStatus(`Updated proposal — ${data.schedule.length} events. Confirm when it looks right, or request more changes.`);
+    }
   } catch (err) {
     setStatus("Error: " + err.message, true);
   } finally {
@@ -534,9 +566,53 @@ async function applyAdjustment() {
   }
 }
 
+async function confirmSchedule() {
+  if (!sessionId) return;
+  confirmBtn.disabled = true;
+  denyBtn.disabled = true;
+  setStatus("Writing your schedule to Google Calendar…");
+
+  try {
+    const res = await fetch("/api/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    const data = await res.json();
+    if (res.status === 404) {
+      sessionId = null;
+      confirmBar.classList.remove("visible");
+      setStatus("Your session expired — please rebuild your schedule.", true);
+      return;
+    }
+    if (!res.ok) throw new Error(data.detail || "Unknown error");
+
+    scheduleConfirmed = true;
+    confirmBar.classList.remove("visible");
+    adjustBar.classList.add("visible");
+    setStatus(`✓ Schedule confirmed — ${data.events_written} events written to your Google Calendar. You can still make changes below.`);
+  } catch (err) {
+    setStatus("Error: " + err.message, true);
+  } finally {
+    confirmBtn.disabled = false;
+    denyBtn.disabled = false;
+  }
+}
+
+function denySchedule() {
+  // Keep the proposal visible; open the adjust bar so the user can say what to change
+  adjustBar.classList.add("visible");
+  adjustInput.placeholder = "What would you like changed? e.g. move gym to Saturday, remove tennis";
+  adjustInput.focus();
+  setStatus("Describe the changes you'd like below — the proposal will update for another review.");
+}
+
 // ── Events ────────────────────────────────────────────────────────────────
 buildBtn.addEventListener("click", buildSchedule);
 goalsInput.addEventListener("keydown", e => { if (e.key === "Enter") buildSchedule(); });
+
+confirmBtn.addEventListener("click", confirmSchedule);
+denyBtn.addEventListener("click", denySchedule);
 
 adjustBtn.addEventListener("click", applyAdjustment);
 adjustInput.addEventListener("keydown", e => { if (e.key === "Enter") applyAdjustment(); });

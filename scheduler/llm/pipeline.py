@@ -13,19 +13,28 @@ from scheduler import orchestrator
 from scheduler.orchestrator import CalendarWriteError
 
 
-def _parse_and_run(goals: str):
+def _parse_and_run(payload):
+    # Accepts a plain goals string (CLI — writes calendar immediately) or a
+    # {"goals": str, "write_calendar": bool} dict (web preview/confirm flow).
+    if isinstance(payload, str):
+        goals, write_calendar = payload, True
+    else:
+        goals = payload["goals"]
+        write_calendar = payload.get("write_calendar", True)
+
     user_config = parse_goals(goals)
     print(f"[main] Parsed {len(user_config.activities)} activities:")
     for a in user_config.activities:
-        print(f"  - {a.name} ({a.category}): {a.sessions_per_week}x/week × {a.duration_hours}h")
+        pin = f" on {a.day}" if a.day else ""
+        print(f"  - {a.name} ({a.category}): {a.sessions_per_week}x/week × {a.duration_hours}h{pin}")
     calendar_error: str | None = None
     try:
-        schedule = orchestrator.run(user_config)
+        schedule = orchestrator.run(user_config, write_calendar=write_calendar)
     except CalendarWriteError as exc:
         schedule = exc.schedule
         calendar_error = str(exc)
     return schedule, user_config, calendar_error
 
 
-# goals (str) → (list[ScheduleEntry], UserConfig, calendar_error | None)
+# goals (str | dict) → (list[ScheduleEntry], UserConfig, calendar_error | None)
 pipeline = RunnableLambda(_parse_and_run)

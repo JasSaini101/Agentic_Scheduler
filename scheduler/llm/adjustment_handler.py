@@ -153,8 +153,16 @@ def _add_activity(activity_name: str, day: str, schedule: list[ScheduleEntry], u
     return None
 
 
-def apply(change_text: str, schedule: list[ScheduleEntry], user_config: UserConfig) -> list[ScheduleEntry]:
-    """Parse the NL change, apply remove/add actions, update Google Calendar."""
+def apply(
+    change_text: str,
+    schedule: list[ScheduleEntry],
+    user_config: UserConfig,
+    sync_calendar: bool = True,
+) -> list[ScheduleEntry]:
+    """Parse the NL change and apply remove/add actions.
+
+    sync_calendar=False edits only the in-memory schedule (used while a
+    proposed schedule is awaiting confirmation and nothing has been written)."""
     actions = _parse_actions(change_text, schedule)
     print(f"\n[adjustment] Applying {len(actions)} action(s): {actions}")
 
@@ -169,7 +177,8 @@ def apply(change_text: str, schedule: list[ScheduleEntry], user_config: UserConf
                 if e.day == day and label.lower() in e.label.lower()
             ]
             for entry in to_remove:
-                _delete_calendar_event(entry, user_config.calendar_id)
+                if sync_calendar:
+                    _delete_calendar_event(entry, user_config.calendar_id)
                 result.remove(entry)
                 print(f"  [adjustment] Removed: {entry.label} on {entry.day}")
 
@@ -180,10 +189,11 @@ def apply(change_text: str, schedule: list[ScheduleEntry], user_config: UserConf
             if new_entry:
                 result.append(new_entry)
                 print(f"  [adjustment] Added: {new_entry.label} on {new_entry.day} at {new_entry.start_hour}:00")
-                try:
-                    from scheduler.data.providers.calendar_writer import write_schedule
-                    write_schedule([new_entry], user_config.calendar_id)
-                except BaseException as exc:
-                    warnings.warn(f"[adjustment] Could not write new event to calendar: {exc}")
+                if sync_calendar:
+                    try:
+                        from scheduler.data.providers.calendar_writer import write_schedule
+                        write_schedule([new_entry], user_config.calendar_id, replace=False)
+                    except BaseException as exc:
+                        warnings.warn(f"[adjustment] Could not write new event to calendar: {exc}")
 
     return result
