@@ -14,7 +14,7 @@ from datetime import timedelta
 
 import requests
 
-from scheduler.data.mock_week import WEEK_START, DAYS
+from scheduler.data.mock_week import DAYS, current_week_start
 
 
 _API_BASE = "https://api.ouraring.com/v2/usercollection/daily_sleep"
@@ -34,12 +34,13 @@ def fetch_sleep_scores() -> dict:
     if not token:
         raise RuntimeError("OURA_ACCESS_TOKEN not set")
 
-    week_end = WEEK_START + timedelta(days=7)
+    week_start = current_week_start()
+    week_end = week_start + timedelta(days=7)
     resp = requests.get(
         _API_BASE,
         headers={"Authorization": f"Bearer {token}"},
         params={
-            "start_date": WEEK_START.isoformat(),
+            "start_date": week_start.isoformat(),
             "end_date": week_end.isoformat(),
         },
         timeout=10,
@@ -57,7 +58,7 @@ def fetch_sleep_scores() -> dict:
 
     result = {}
     for i, day_name in enumerate(DAYS):
-        date_key = (WEEK_START + timedelta(days=i)).isoformat()
+        date_key = (week_start + timedelta(days=i)).isoformat()
         if date_key in date_to_score:
             result[day_name] = date_to_score[date_key]
 

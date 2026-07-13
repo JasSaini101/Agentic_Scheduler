@@ -155,6 +155,7 @@ class ScheduleResponse(BaseModel):
     session_id: str
     schedule: list[ScheduleEntry]
     config: UserConfig
+    week_start: str = ""      # ISO Monday date the schedule applies to
     confirmed: bool = False   # proposal only — nothing written until /api/confirm
     calendar_synced: bool = True
     calendar_error: str | None = None
@@ -281,10 +282,12 @@ def build_schedule(req: ScheduleRequest, request: Request):
     _sessions[session_id] = (schedule, user_config, False)
     _persist_sessions()
 
+    from scheduler.data.mock_week import current_week_start
     return ScheduleResponse(
         session_id=session_id,
         schedule=schedule,
         config=user_config,
+        week_start=current_week_start().isoformat(),
         confirmed=False,
         calendar_synced=calendar_error is None,
         calendar_error=calendar_error,

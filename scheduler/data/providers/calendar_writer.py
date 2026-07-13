@@ -14,7 +14,7 @@ OAuth scope required: https://www.googleapis.com/auth/calendar
 
 from datetime import datetime, timedelta, timezone
 
-from scheduler.data.mock_week import DAYS, WEEK_START
+from scheduler.data.mock_week import DAYS, current_week_start
 from scheduler.models import ScheduleEntry
 from scheduler.data.providers.google_auth import get_service as _get_service
 
@@ -24,13 +24,14 @@ _SOURCE_TAG = "agentic_scheduler"
 def _day_to_date(day_name: str) -> str:
     """Return the ISO date string for the given day name in the current week."""
     idx = DAYS.index(day_name)
-    return (WEEK_START + timedelta(days=idx)).isoformat()
+    return (current_week_start() + timedelta(days=idx)).isoformat()
 
 
 def _delete_scheduler_events(service, calendar_id: str) -> None:
     """Delete all events tagged with source=agentic_scheduler for this week."""
-    week_start_dt = datetime.combine(WEEK_START, datetime.min.time()).isoformat() + "Z"
-    week_end = WEEK_START + timedelta(days=7)
+    week_start = current_week_start()
+    week_start_dt = datetime.combine(week_start, datetime.min.time()).isoformat() + "Z"
+    week_end = week_start + timedelta(days=7)
     week_end_dt = datetime.combine(week_end, datetime.min.time()).isoformat() + "Z"
 
     page_token = None
