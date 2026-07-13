@@ -28,6 +28,13 @@ def _day_to_date(day_name: str) -> str:
     return date_for_day(day_name).isoformat()
 
 
+def _hhmm(hour: float) -> str:
+    """Fractional hour → 'HH:MM' (9.5 → '09:30')."""
+    h = int(hour)
+    m = int(round((hour - h) * 60))
+    return f"{h:02d}:{m:02d}"
+
+
 def _delete_scheduler_events(service, calendar_id: str) -> None:
     """Delete scheduler-tagged events in the upcoming 7-day window."""
     window_start = date.today()
@@ -77,10 +84,8 @@ def write_schedule(entries: list[ScheduleEntry], calendar_id: str = "primary", r
     created = 0
     for entry in to_write:
         date_str = _day_to_date(entry.day)
-        start_dt = f"{date_str}T{entry.start_hour:02d}:00:00"
-        end_hour = int(entry.end_hour)
-        end_min = int((entry.end_hour - end_hour) * 60)
-        end_dt = f"{date_str}T{end_hour:02d}:{end_min:02d}:00"
+        start_dt = f"{date_str}T{_hhmm(entry.start_hour)}:00"
+        end_dt = f"{date_str}T{_hhmm(entry.end_hour)}:00"
 
         description = "\n".join(entry.reasons) if entry.reasons else ""
 
