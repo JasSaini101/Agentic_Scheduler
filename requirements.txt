@@ -9,5 +9,6 @@ anthropic==0.115.1
 langchain==1.3.11
 langchain-anthropic==1.4.8
 langchain-core==1.4.8
+langgraph==1.2.7
 pydantic==2.13.4
 populartimes @ git+https://github.com/m-wrzr/populartimes.git
