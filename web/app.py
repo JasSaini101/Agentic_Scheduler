@@ -156,6 +156,7 @@ class ScheduleResponse(BaseModel):
     schedule: list[ScheduleEntry]
     config: UserConfig
     week_start: str = ""      # ISO Monday date the schedule applies to
+    day_dates: dict[str, str] = {}   # day name → ISO date it resolves to (rolling window)
     confirmed: bool = False   # proposal only — nothing written until /api/confirm
     calendar_synced: bool = True
     calendar_error: str | None = None
@@ -282,12 +283,13 @@ def build_schedule(req: ScheduleRequest, request: Request):
     _sessions[session_id] = (schedule, user_config, False)
     _persist_sessions()
 
-    from scheduler.data.mock_week import current_week_start
+    from scheduler.data.mock_week import DAYS, current_week_start, date_for_day
     return ScheduleResponse(
         session_id=session_id,
         schedule=schedule,
         config=user_config,
         week_start=current_week_start().isoformat(),
+        day_dates={d: date_for_day(d).isoformat() for d in DAYS},
         confirmed=False,
         calendar_synced=calendar_error is None,
         calendar_error=calendar_error,

@@ -16,12 +16,18 @@ Returns a list matching the HARD_EVENTS mock schema:
 import os
 from datetime import datetime, timezone, timedelta
 
-from scheduler.data.mock_week import DAYS, current_week_start
+from datetime import date
+
+from scheduler.data.mock_week import DAYS
 
 
 def _day_names_by_date() -> dict[str, str]:
-    week_start = current_week_start()
-    return {(week_start + timedelta(days=i)).isoformat(): name for i, name in enumerate(DAYS)}
+    """Map ISO date → day name for the rolling window [today, today+6]."""
+    today = date.today()
+    return {
+        (today + timedelta(days=i)).isoformat(): DAYS[(today + timedelta(days=i)).weekday()]
+        for i in range(7)
+    }
 
 
 def _get_service():
@@ -49,12 +55,12 @@ def fetch_hard_events() -> list[dict]:
     calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
     service = _get_service()
 
-    week_start = current_week_start()
+    window_start = date.today()
     day_names = _day_names_by_date()
-    week_end = week_start + timedelta(days=7)
-    time_min = datetime(week_start.year, week_start.month, week_start.day,
+    window_end = window_start + timedelta(days=7)
+    time_min = datetime(window_start.year, window_start.month, window_start.day,
                         tzinfo=timezone.utc).isoformat()
-    time_max = datetime(week_end.year, week_end.month, week_end.day,
+    time_max = datetime(window_end.year, window_end.month, window_end.day,
                         tzinfo=timezone.utc).isoformat()
 
     result = service.events().list(

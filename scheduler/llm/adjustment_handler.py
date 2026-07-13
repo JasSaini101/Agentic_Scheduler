@@ -69,11 +69,9 @@ def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str) -> None:
     try:
         from scheduler.data.providers.google_auth import get_service
         service = get_service()
-        from scheduler.data.mock_week import DAYS, current_week_start
-        from datetime import timedelta
+        from scheduler.data.mock_week import date_for_day
 
-        idx = DAYS.index(entry.day)
-        date_str = (current_week_start() + timedelta(days=idx)).isoformat()
+        date_str = date_for_day(entry.day).isoformat()
         start_dt = f"{date_str}T{entry.start_hour:02d}:00:00Z"
 
         events = service.events().list(

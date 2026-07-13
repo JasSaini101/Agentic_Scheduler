@@ -380,7 +380,16 @@ let calendarAuthorized = false;
 let scheduleConfirmed = false;
 let currentSchedule = [];          // last schedule received from the API
 let scheduleWeekStart = null;      // ISO Monday the schedule applies to
+let scheduleDayDates = {};         // day name → ISO date (rolling 7-day window)
 let viewedMonday = mondayOf(new Date());   // Monday of the week being viewed
+
+// Fallback: next occurrence of a day name on/after today (matches backend rule)
+function nextOccurrenceIso(dayName) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const delta = (DAYS.indexOf(dayName) - ((today.getDay() + 6) % 7) + 7) % 7;
+  return isoDate(addDays(today, delta));
+}
 
 // ── Date helpers ──────────────────────────────────────────────────────────
 function mondayOf(d) {
@@ -469,12 +478,17 @@ function hideTooltip(e) {
 }
 
 // ── Render calendar ───────────────────────────────────────────────────────
-function setSchedule(schedule, weekStartIso) {
+function setSchedule(schedule, weekStartIso, dayDates) {
   currentSchedule = schedule || [];
   if (weekStartIso) scheduleWeekStart = weekStartIso;
-  viewedMonday = scheduleWeekStart
-    ? mondayOf(new Date(scheduleWeekStart + "T00:00:00"))
-    : mondayOf(new Date());
+  if (dayDates && Object.keys(dayDates).length) {
+    scheduleDayDates = dayDates;
+  } else if (!Object.keys(scheduleDayDates).length) {
+    // No mapping from the server yet — compute the rolling window locally
+    scheduleDayDates = {};
+    DAYS.forEach(d => { scheduleDayDates[d] = nextOccurrenceIso(d); });
+  }
+  viewedMonday = mondayOf(new Date());
   renderCalendar();
 }
 
@@ -482,18 +496,22 @@ function renderCalendar() {
   calEl.innerHTML = "";
   legend.classList.add("visible");
 
-  // Week nav label + note
+  // Week nav label
   wkLabel.textContent = weekLabel(viewedMonday);
-  const viewedIso = isoDate(viewedMonday);
-  const onScheduleWeek = scheduleWeekStart === viewedIso;
-  wkNote.textContent =
-    scheduleWeekStart && !onScheduleWeek
-      ? `Your schedule is on the week of ${weekLabel(mondayOf(new Date(scheduleWeekStart + "T00:00:00")))}`
-      : "";
 
-  const schedule = onScheduleWeek ? currentSchedule : [];
+  const schedule = currentSchedule;
   const today = new Date();
   const todayIso = isoDate(today);
+
+  // Note when the schedule exists but none of its days fall in the viewed week
+  const viewStart = isoDate(viewedMonday);
+  const viewEnd = isoDate(addDays(viewedMonday, 6));
+  const usedDates = schedule.map(e => scheduleDayDates[e.day]).filter(Boolean).sort();
+  const anyVisible = usedDates.some(d => d >= viewStart && d <= viewEnd);
+  wkNote.textContent =
+    usedDates.length && !anyVisible
+      ? `Your schedule runs ${usedDates[0]} – ${usedDates[usedDates.length - 1]}`
+      : "";
 
   const totalHeight = HOURS * PX_PER_HR;
   const grid = document.createElement("div");
@@ -504,18 +522,18 @@ function renderCalendar() {
   corner.className = "day-header corner";
   grid.appendChild(corner);
 
-  const dayDates = DAYS.map((_, i) => addDays(viewedMonday, i));
+  const colDates = DAYS.map((_, i) => addDays(viewedMonday, i));
 
   DAYS.forEach((d, i) => {
     const h = document.createElement("div");
-    const dIso = isoDate(dayDates[i]);
+    const dIso = isoDate(colDates[i]);
     h.className = "day-header"
       + (dIso === todayIso ? " today" : "")
       + (dIso < todayIso ? " past" : "");
     h.textContent = DAY_SHORT[i];
     const dateEl = document.createElement("span");
     dateEl.className = "dh-date";
-    dateEl.textContent = dayDates[i].getDate();
+    dateEl.textContent = colDates[i].getDate();
     h.appendChild(dateEl);
     grid.appendChild(h);
   });
@@ -535,7 +553,7 @@ function renderCalendar() {
   // Day columns
   DAYS.forEach((day, di) => {
     const col = document.createElement("div");
-    const dIso = isoDate(dayDates[di]);
+    const dIso = isoDate(colDates[di]);
     col.className = "day-col" + (dIso < todayIso ? " past" : "");
     col.style.height = totalHeight + "px";
 
@@ -547,8 +565,9 @@ function renderCalendar() {
       col.appendChild(line);
     }
 
-    // Events for this day
-    const dayEntries = schedule.filter(e => e.day === day);
+    // Events whose resolved DATE lands on this column (rolling window means
+    // a "Friday" entry can belong to next week's Friday)
+    const dayEntries = schedule.filter(e => scheduleDayDates[e.day] === dIso);
     dayEntries.forEach(entry => {
       const top    = (entry.start_hour - HOUR_START) * PX_PER_HR;
       const height = Math.max((entry.end_hour - entry.start_hour) * PX_PER_HR - 2, 18);
@@ -630,7 +649,7 @@ async function buildSchedule() {
 
     sessionId = data.session_id;
     scheduleConfirmed = false;
-    setSchedule(data.schedule, data.week_start);
+    setSchedule(data.schedule, data.week_start, data.day_dates);
     confirmBar.classList.add("visible");
     adjustBar.classList.remove("visible");
     setStatus(`Proposed schedule — ${data.schedule.length} events. Review it below, then confirm or request changes.`);
