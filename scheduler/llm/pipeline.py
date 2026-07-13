@@ -1,16 +1,14 @@
 """
 Pipeline
 ────────
-Top-level LangChain chain: parse goals → build schedule.
-Returns (schedule, user_config) so the caller can run mid-week adjustments.
-The adjustment step stays outside the chain (requires interactive user input mid-flow).
+Top-level entry: parse goals → run the LangGraph agent graph → (optionally)
+write to Google Calendar. Returns (schedule, user_config, calendar_error) so
+callers can run mid-week adjustments and surface sync failures.
 """
 
 from langchain_core.runnables import RunnableLambda
 
-from scheduler.llm.goal_parser import parse_goals
-from scheduler import orchestrator
-from scheduler.orchestrator import CalendarWriteError
+from scheduler.graph.build import run_schedule
 
 
 def _parse_and_run(payload):
@@ -22,17 +20,17 @@ def _parse_and_run(payload):
         goals = payload["goals"]
         write_calendar = payload.get("write_calendar", True)
 
-    user_config = parse_goals(goals)
-    print(f"[main] Parsed {len(user_config.activities)} activities:")
-    for a in user_config.activities:
-        pin = f" on {a.day}" if a.day else ""
-        print(f"  - {a.name} ({a.category}): {a.sessions_per_week}x/week × {a.duration_hours}h{pin}")
+    schedule, user_config, agent_log = run_schedule(goals)
+    for line in agent_log:
+        print(f"[graph] {line}")
+
     calendar_error: str | None = None
-    try:
-        schedule = orchestrator.run(user_config, write_calendar=write_calendar)
-    except CalendarWriteError as exc:
-        schedule = exc.schedule
-        calendar_error = str(exc)
+    if write_calendar:
+        try:
+            from scheduler.data.providers.calendar_writer import write_schedule
+            write_schedule(schedule, user_config.calendar_id)
+        except Exception as exc:
+            calendar_error = f"Schedule built, but writing to Google Calendar failed: {exc}"
     return schedule, user_config, calendar_error
 
 

@@ -88,6 +88,9 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
 
     entries: list[ScheduleEntry] = []
 
+    # Day-pinned activities place first so flexible ones can't steal their gap
+    activities = sorted(activities, key=lambda a: a.get("day") is None)
+
     # Track remaining budget or sessions for each activity
     # quota-based: remaining_hours[label] = hours left to place
     # session-based: sessions_left[label] = sessions left to place
@@ -103,7 +106,7 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
         end = start + duration
         entry = ScheduleEntry(
             day=day,
-            start_hour=int(start),
+            start_hour=start,
             end_hour=end,
             label=activity["label"],
             category="fill",

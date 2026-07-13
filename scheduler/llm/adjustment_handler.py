@@ -72,7 +72,8 @@ def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str) -> None:
         from scheduler.data.mock_week import date_for_day
 
         date_str = date_for_day(entry.day).isoformat()
-        start_dt = f"{date_str}T{entry.start_hour:02d}:00:00Z"
+        h, m = int(entry.start_hour), int(round((entry.start_hour % 1) * 60))
+        start_dt = f"{date_str}T{h:02d}:{m:02d}:00Z"
 
         events = service.events().list(
             calendarId=calendar_id,

@@ -38,23 +38,21 @@ class TimeSlot:
 
 
 class ScheduleEntry(BaseModel):
-    """A confirmed entry in the final weekly schedule."""
+    """A confirmed entry in the final weekly schedule.
+
+    Hours are floats so half-hour boundaries survive (a 9:30 start must not
+    truncate to 9:00 — that created real overlaps)."""
     day: str
-    start_hour: int
+    start_hour: float
     end_hour: float
     label: str
     category: str   # "gym" | "sport" | "hard_block" | "fill"
     score: Optional[float] = None
     reasons: list[str] = []
 
-    @field_validator("start_hour", mode="before")
-    @classmethod
-    def coerce_start_hour(cls, v):
-        return int(v)
-
     def __str__(self):
-        end = int(self.end_hour)
-        start_fmt = f"{self.start_hour % 12 or 12}{'am' if self.start_hour < 12 else 'pm'}"
+        start, end = int(self.start_hour), int(self.end_hour)
+        start_fmt = f"{start % 12 or 12}{'am' if start < 12 else 'pm'}"
         end_fmt = f"{end % 12 or 12}{'am' if end < 12 else 'pm'}"
         score_str = f"  [score: {self.score:.2f}]" if self.score else ""
         return f"  {self.day:10s} {start_fmt}–{end_fmt:6s} | {self.label}{score_str}"

@@ -93,12 +93,11 @@ def _is_blocked(day: str, hour: int, blocked_ranges: list[dict], duration: float
     return False
 
 
-def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
-    """
-    Score all candidate slots, filter blocked/tight ones, return top N.
-    week_context["blocked"] is a list of already-locked hour ranges.
-    week_context["sleep_scores"] is an optional {day: int} map (1–10 scale).
-    """
+def score_candidates(week_context: dict, user_config=None) -> list[TimeSlot]:
+    """Score every viable gym slot and return them sorted best-first.
+
+    This is the deterministic scoring tool: agents (LLM or rule-based)
+    choose from these candidates rather than re-deriving scores."""
     blocked = week_context.get("blocked", [])
     sleep_scores = week_context.get("sleep_scores", SLEEP_SCORES)
 
@@ -109,7 +108,6 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
         gym_target = None
 
     gym_duration = gym_target.duration_hours if gym_target else _DEFAULT_GYM_DURATION
-    top_n = gym_target.sessions_per_week if gym_target else _DEFAULT_TOP_N
     candidate_hours = gym_target.candidate_hours if gym_target else GYM_CANDIDATE_HOURS
     # Respect a day pin (e.g. "gym on Friday") by only considering that day
     days = [gym_target.day] if gym_target and gym_target.day else DAYS
@@ -146,6 +144,23 @@ def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
             slots.append(slot)
 
     slots.sort(key=lambda s: s.score, reverse=True)
+    return slots
+
+
+def run(week_context: dict, user_config=None) -> list[ScheduleEntry]:
+    """
+    Score all candidate slots, filter blocked/tight ones, return top N.
+    week_context["blocked"] is a list of already-locked hour ranges.
+    week_context["sleep_scores"] is an optional {day: int} map (1–10 scale).
+    """
+    if user_config is not None:
+        gym_targets = user_config.by_category("gym")
+        gym_target = gym_targets[0] if gym_targets else None
+    else:
+        gym_target = None
+    top_n = gym_target.sessions_per_week if gym_target else _DEFAULT_TOP_N
+
+    slots = score_candidates(week_context, user_config)
 
     entries = []
     seen_days: set[str] = set()
