@@ -16,8 +16,10 @@ class ScheduleState(TypedDict, total=False):
     goals: str                      # raw natural-language goals
     user_config: UserConfig | None  # parsed config (None until parse node runs)
     week_context: dict              # weather / sleep / busyness / hard events
-    entries: list[ScheduleEntry]    # the schedule under construction
+    constraints: object             # ConstraintSet accumulated by agent nodes
+    entries: list[ScheduleEntry]    # hard blocks + solver output
+    infeasible: str | None          # solver's infeasibility explanation
     agent_log: Annotated[list[str], _append]   # rationale trail across nodes
     done_agents: list[str]          # supervisor bookkeeping
     critic_feedback: str | None     # critic's revision request, if any
-    revisions_left: int             # remaining critic→revise loops
+    revisions_left: int             # remaining critic→solve loops

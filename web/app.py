@@ -272,6 +272,15 @@ def build_schedule(req: ScheduleRequest, request: Request):
         schedule, user_config, calendar_error = pipeline.invoke(
             {"goals": req.goals, "write_calendar": False}
         )
+    except RuntimeError as exc:
+        # Solver infeasibility — a crafted, user-facing explanation
+        if "feasible" in str(exc).lower():
+            raise HTTPException(status_code=422, detail=str(exc))
+        logger.exception("Schedule build failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not build the schedule. Try rephrasing your goals.",
+        )
     except Exception:
         logger.exception("Schedule build failed")
         raise HTTPException(

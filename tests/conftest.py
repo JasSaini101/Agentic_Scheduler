@@ -45,13 +45,13 @@ def fill(name="personal project", sessions=1, hours=10.0, day=None):
 
 @pytest.fixture
 def run_graph():
-    """Run the full graph for a config with deterministic agents."""
+    """Run the full hybrid graph (agents → CP-SAT solver) deterministically."""
     def _run(config: UserConfig, revisions: int = DEFAULT_REVISIONS,
-             adjust_fn=None, week_context=None):
+             llm=None, patch_fn=None, week_context=None):
         graph = build_graph(
-            llm=None,
+            llm=llm,
             parse_fn=lambda goals: config,
-            adjust_fn=adjust_fn or (lambda fb, entries, cfg: entries),
+            patch_fn=patch_fn,
         )
         return graph.invoke({
             "goals": config.raw_goals or "test goals",
