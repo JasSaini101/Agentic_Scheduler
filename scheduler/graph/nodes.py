@@ -60,13 +60,22 @@ def _request_from_target(t: ActivityTarget) -> ActivityRequest:
     # "20h of projects" (1 session × 20h) → quota chunked by the solver;
     # "meal prep 3×1.5h" stays session-based with exact session count.
     quota = t.category == "fill" and t.sessions_per_week == 1 and t.duration_hours > 4
+    # A whole-activity pin (t.day) on a multi-session request would pin EVERY
+    # session to that day — contradicting one-per-day and silently losing
+    # sessions. Downgrade it to a per-session pin (one session on that day,
+    # the rest free). pinned_day stays only for single-session requests.
+    pinned_day, pinned_days = t.day, list(t.days)
+    if pinned_day and (t.sessions_per_week > 1 or pinned_days):
+        pinned_days = [pinned_day] + pinned_days
+        pinned_day = None
     return ActivityRequest(
         name=t.name,
         category=t.category,
         sessions=t.sessions_per_week,
         session_hours=t.duration_hours,
         total_hours=t.sessions_per_week * t.duration_hours if quota else None,
-        pinned_day=t.day,
+        pinned_day=pinned_day,
+        pinned_days=pinned_days,
         allowed_hours=t.candidate_hours if t.category in ("gym", "sport") else [],
     )
 
@@ -177,12 +186,13 @@ def make_sport_node(llm):
         weather = state["week_context"].get("weather", WEATHER)
 
         requests, exclusions, prefs, logs = [], [], [], []
+        tuned_names: set[str] = set()
         for target in targets:
             requests.append(_request_from_target(target))
             for day, w in weather.items():
                 cond = w.get("condition", "clear")
                 if cond == "storm":
-                    if target.day == day:
+                    if target.day == day or day in target.days:
                         prefs.append(SoftPreference(
                             activity=target.name, day=day, weight=-5,
                             reason=f"Storm forecast on {day} — scheduled anyway at your request"))
@@ -205,6 +215,9 @@ def make_sport_node(llm):
             logs.append(f"[sport] emitted request for {target.name} "
                         f"({target.sessions_per_week}×{target.duration_hours}h)")
 
+            if target.name.lower() in tuned_names:
+                continue   # duplicate parse targets share one tuning pass
+            tuned_names.add(target.name.lower())
             tuned = _llm_preferences(llm, "sport", state.get("goals", ""),
                                      f"weather forecast: {weather}", target.name)
             if tuned:

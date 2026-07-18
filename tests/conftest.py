@@ -28,14 +28,16 @@ def make_config(*activities: ActivityTarget) -> UserConfig:
     return UserConfig(activities=list(activities), fill_window=(8, 22))
 
 
-def gym(sessions=3, hours=1.5, day=None):
+def gym(sessions=3, hours=1.5, day=None, days=()):
     return ActivityTarget(name="gym", sessions_per_week=sessions, duration_hours=hours,
-                          candidate_hours=[6, 7, 17, 18], category="gym", day=day)
+                          candidate_hours=[6, 7, 17, 18], category="gym",
+                          day=day, days=list(days))
 
 
-def sport(name="tennis", sessions=2, hours=1.5, day=None):
+def sport(name="tennis", sessions=2, hours=1.5, day=None, days=()):
     return ActivityTarget(name=name, sessions_per_week=sessions, duration_hours=hours,
-                          candidate_hours=[8, 9, 10], category="sport", day=day)
+                          candidate_hours=[8, 9, 10], category="sport",
+                          day=day, days=list(days))
 
 
 def fill(name="personal project", sessions=1, hours=10.0, day=None):

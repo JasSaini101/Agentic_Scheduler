@@ -218,6 +218,43 @@ def test_patch_add_and_remove_requests():
     assert {e.label for e in entries} == {"Yoga"}
 
 
+def test_duplicate_requests_merge_and_all_place():
+    """The parser may split '3 tennis, one Monday one Friday' into two
+    activities — the solver merges them so one-per-day holds and all
+    sessions land on distinct days."""
+    cs = ConstraintSet(
+        requests=[
+            ActivityRequest(name="tennis", category="sport", sessions=2,
+                            session_hours=1.5, pinned_day="Monday"),
+            ActivityRequest(name="tennis", category="sport", sessions=1,
+                            session_hours=1.5, pinned_day="Friday"),
+        ],
+        fill_window=(8.0, 22.0),
+    )
+    entries = solve(cs).entries
+    days = [e.day for e in entries]
+    assert len(entries) == 3
+    assert len(set(days)) == 3
+    assert "Monday" in days and "Friday" in days
+
+
+def test_merged_shortfall_counts_real_total():
+    """Oversubscribed merged request reports the user's total, not a split."""
+    cs = ConstraintSet(
+        requests=[
+            ActivityRequest(name="tennis", category="sport", sessions=2, session_hours=1.5),
+            ActivityRequest(name="tennis", category="sport", sessions=1, session_hours=1.5),
+        ],
+        exclusions=[HardExclusion(day=d, start_hour=0, end_hour=24,
+                                  activity="tennis", reason="storm")
+                    for d in WORKDAYS],
+        fill_window=(8.0, 22.0),
+    )
+    result = solve(cs)
+    assert len(result.entries) == 2          # only Sat + Sun viable
+    assert result.unplaced and "of 3" in result.unplaced[0]
+
+
 def test_constraint_patch_pins_activity():
     cs = ConstraintSet(
         requests=[ActivityRequest(name="gym", category="gym", sessions=1, session_hours=1.5)],

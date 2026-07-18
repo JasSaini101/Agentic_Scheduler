@@ -30,7 +30,9 @@ Rules:
 - "fill" category: work, study, personal projects, hobbies, errands, anything else
 - For hour-quota fill activities like "20h personal projects", set sessions_per_week=1 and duration_hours=20.0
 - For session-based activities like "gym 3x", set sessions_per_week=3 and duration_hours=1.5
-- If the user pins an activity to a specific day (e.g. "casino on Friday", "tennis Saturday morning"), set "day" to that exact day name (Monday–Sunday). Otherwise set "day" to null.
+- Never emit two activities with the same name — combine them into ONE activity with the total session count
+- If the WHOLE activity belongs to one day (e.g. "casino on Friday"), set "day" to that exact day name (Monday–Sunday). Otherwise set "day" to null.
+- If INDIVIDUAL sessions are pinned to days (e.g. "3 tennis sessions, one on Monday and one on Friday" → sessions_per_week=3), list those days in "days" (here ["Monday", "Friday"]); unlisted sessions may go on any day. Otherwise leave "days" empty.
 - Do not include candidate_hours — leave it as an empty list
 - fill_window should always be [8, 22] unless the user specifies otherwise
 - If the text is not a set of weekly goals (e.g. it is a change request against an existing schedule, a question, or unrelated text), return an empty activities list\
@@ -43,6 +45,7 @@ class _ParsedActivity(BaseModel):
     duration_hours: float
     category: str
     day: str | None = None
+    days: list[str] = []
 
 
 class _ParsedConfig(BaseModel):
@@ -96,6 +99,7 @@ def parse_goals(goals: str, calendar_id: str = "primary") -> UserConfig:
             candidate_hours=_DEFAULT_CANDIDATE_HOURS.get(item.category, _DEFAULT_CANDIDATE_HOURS["fill"]),
             category=item.category,
             day=item.day.strip().capitalize() if item.day else None,
+            days=[d.strip().capitalize() for d in item.days],
         )
         for item in parsed.activities
     ]

@@ -41,6 +41,29 @@ def test_runs_fully_without_llm(run_graph):
     assert result.get("infeasible") is None
 
 
+def test_sport_days_pin_individual_sessions(run_graph):
+    """'3 tennis sessions, one on Monday and one on Friday' — all 3 placed,
+    Monday and Friday included, each on its own day."""
+    result = run_graph(make_config(sport(sessions=3, days=["Monday", "Friday"])),
+                       week_context={"hard_events": []})
+    tennis = [e for e in result["entries"] if e.category == "sport"]
+    days = [e.day for e in tennis]
+    assert len(tennis) == 3 and len(set(days)) == 3
+    assert "Monday" in days and "Friday" in days
+    assert not any("could not fit" in l for l in result["agent_log"])
+
+
+def test_whole_day_pin_on_multi_session_does_not_lose_sessions(run_graph):
+    """Regression: 'day' on a 2-session activity used to pin BOTH sessions to
+    that day, contradicting one-per-day and dropping a session."""
+    result = run_graph(make_config(gym(sessions=2, day="Saturday")),
+                       week_context={"hard_events": []})
+    gyms = [e for e in result["entries"] if e.category == "gym"]
+    assert len(gyms) == 2
+    assert "Saturday" in [e.day for e in gyms]
+    assert not any("could not fit" in l for l in result["agent_log"])
+
+
 def test_critic_approves_clean_schedule(run_graph):
     result = run_graph(make_config(gym(2)))
     assert result.get("critic_feedback") is None

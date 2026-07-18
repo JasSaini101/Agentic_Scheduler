@@ -68,6 +68,10 @@ EVAL_CASES = [
      {"sport_names": ["tennis"]}),
     ("work on my portfolio site for 12 hours and hit the gym twice",
      {"gym_sessions": 2, "fill_quota_hours": 12.0}),
+    ("3 tennis sessions, one on Monday and one on Friday",
+     {"session_days": {"tennis": (3, ["Monday", "Friday"])}}),
+    ("play tennis on Saturday and Sunday",
+     {"session_days": {"tennis": (2, ["Saturday", "Sunday"])}}),
 ]
 
 
@@ -112,6 +116,18 @@ def test_goal_parsing(goals, expected):
             match = next((a for k, a in by_name.items() if name in k), None)
             assert match is not None, f"activity {name} not parsed"
             assert match.day == day, f"{name} pinned to {match.day}, expected {day}"
+
+    if "session_days" in expected:
+        # one activity with the full session count; the named days pinned via
+        # 'days' (or via 'day' when every session is pinned)
+        for name, (sessions, want_days) in expected["session_days"].items():
+            matches = [a for a in cfg.activities if name in a.name.lower()]
+            assert len(matches) == 1, f"expected one '{name}' activity, got {matches}"
+            act = matches[0]
+            assert act.sessions_per_week == sessions
+            pinned = set(act.days) | ({act.day} if act.day else set())
+            for d in want_days:
+                assert d in pinned, f"{name}: {d} not pinned (days={act.days}, day={act.day})"
 
     if "pinned_days" in expected:
         days = {a.day for a in cfg.activities if a.day}

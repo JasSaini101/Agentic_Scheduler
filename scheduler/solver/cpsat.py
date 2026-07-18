@@ -66,11 +66,41 @@ def _chunk_hours(req: ActivityRequest) -> list[float]:
     return [c for c in chunks if c > 0]
 
 
+def _merge_duplicates(requests: list[ActivityRequest]) -> list[ActivityRequest]:
+    """Merge session-based requests for the same activity into one.
+
+    The parser may split "3 tennis, one on Monday and one on Friday" into two
+    'tennis' activities. Left separate, one-per-day would not hold across
+    them and any whole-request pin would contradict itself. Merging sums the
+    sessions, turns pins into per-session pinned_days, and makes shortfall
+    reports count the user's real total."""
+    out: list[ActivityRequest] = []
+    index: dict[tuple, int] = {}
+    for req in requests:
+        key = (req.name.lower(), req.category, req.session_hours)
+        if req.total_hours is not None or key not in index:
+            if req.total_hours is None:
+                index[key] = len(out)
+            out.append(req)
+            continue
+        base = out[index[key]]
+        pins = ([base.pinned_day] if base.pinned_day else []) + base.pinned_days \
+             + ([req.pinned_day] if req.pinned_day else []) + req.pinned_days
+        out[index[key]] = base.model_copy(update={
+            "sessions": base.sessions + req.sessions,
+            "pinned_day": None,
+            "pinned_days": pins,
+            "allowed_hours": sorted(set(base.allowed_hours) | set(req.allowed_hours)),
+        })
+    return out
+
+
 def _label(req: ActivityRequest) -> str:
     return "Gym session" if req.name.lower() == "gym" else req.name.title()
 
 
 def solve(cs: ConstraintSet, time_limit_s: float = 10.0) -> SolveResult:
+    cs = cs.model_copy(update={"requests": _merge_duplicates(cs.requests)})
     model = cp_model.CpModel()
     win_lo = _to_slots(cs.fill_window[0])
     win_hi = _to_slots(cs.fill_window[1])
