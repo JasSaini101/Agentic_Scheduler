@@ -72,12 +72,40 @@ def make_critic_node(llm):
     return critic_node
 
 
-def make_revise_node(adjust_fn):
-    """adjust_fn(change_text, entries, user_config) → updated entries."""
+def make_revise_node(llm, patch_fn=None):
+    """Turn critic feedback into a ConstraintPatch and apply it — the solver
+    then re-solves with the edited constraints (no hand-editing of entries).
+
+    patch_fn(feedback, constraints) → ConstraintPatch is injectable for tests;
+    by default the LLM emits the patch as structured output."""
+    from scheduler.solver import ConstraintPatch
+
+    def _llm_patch(feedback: str, cs) -> "ConstraintPatch":
+        summary = "\n".join(f"- {r.name} ({r.category})"
+                            + (f", pinned {r.pinned_day}" if r.pinned_day else "")
+                            for r in cs.requests)
+        prompt = (
+            "You maintain the constraint set of a schedule solver. Current "
+            f"activity requests:\n{summary}\n\nReviewer feedback:\n{feedback}\n\n"
+            "Emit a ConstraintPatch implementing the feedback: pin activities "
+            "to days via pin_activity, block time ranges via add_exclusions, "
+            "or nudge with add_preferences (weights -5..5). Smallest change wins."
+        )
+        return llm.with_structured_output(ConstraintPatch).invoke(prompt)
+
     def revise_node(state: ScheduleState) -> dict:
         feedback = state.get("critic_feedback") or ""
+        cs = state.get("constraints")
+        make_patch = patch_fn or (_llm_patch if llm is not None else None)
+        if make_patch is None or cs is None:
+            return {
+                "revisions_left": 0,
+                "critic_feedback": None,
+                "agent_log": ["[revise] no LLM to build a constraint patch — keeping schedule"],
+            }
         try:
-            updated = adjust_fn(feedback, state.get("entries", []), state["user_config"])
+            patch = make_patch(feedback, cs)
+            updated = patch.apply(cs)
         except Exception as exc:
             logger.warning("revision failed (%s); keeping schedule as-is", exc)
             return {
@@ -86,9 +114,9 @@ def make_revise_node(adjust_fn):
                 "agent_log": [f"[revise] failed ({exc}); keeping current schedule"],
             }
         return {
-            "entries": updated,
+            "constraints": updated,
             "revisions_left": state.get("revisions_left", 0) - 1,
             "critic_feedback": None,
-            "agent_log": [f"[revise] applied critic feedback: {feedback}"],
+            "agent_log": [f"[revise] patched constraints per feedback: {feedback}"],
         }
     return revise_node
