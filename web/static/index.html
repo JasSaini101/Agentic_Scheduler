@@ -368,10 +368,10 @@
 <script>
 // ── Config ───────────────────────────────────────────────────────────────
 const DAYS   = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-// Grid columns run Sunday-first (US convention) so today sits at the start
-// of the current week instead of the end
-const COL_DAYS  = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-const COL_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+// Grid is a rolling 7-day window: the first column is always TODAY, matching
+// the backend's rolling next-occurrence date resolution
+const N_COLS = 7;
+const COL_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];   // indexed by Date.getDay()
 const HOUR_START = 6;
 const HOUR_END   = 22;
 const HOURS      = HOUR_END - HOUR_START; // 16
@@ -384,7 +384,7 @@ let scheduleConfirmed = false;
 let currentSchedule = [];          // last schedule received from the API
 let scheduleWeekStart = null;      // ISO Monday the schedule applies to
 let scheduleDayDates = {};         // day name → ISO date (rolling 7-day window)
-let viewedWeekStart = weekStartOf(new Date());   // Sunday of the week being viewed
+let viewedWeekStart = todayStart();   // first column of the 7-day window being viewed
 
 // Fallback: next occurrence of a day name on/after today (matches backend rule)
 function nextOccurrenceIso(dayName) {
@@ -395,11 +395,9 @@ function nextOccurrenceIso(dayName) {
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────
-function weekStartOf(d) {
-  // Sunday of the week containing d
-  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  x.setDate(x.getDate() - x.getDay());
-  return x;
+function todayStart() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 function addDays(d, n) {
   const x = new Date(d);
@@ -411,13 +409,13 @@ function isoDate(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function weekLabel(mon) {
-  const sun = addDays(mon, 6);
-  const left = `${MONTHS[mon.getMonth()]} ${mon.getDate()}`;
-  const right = mon.getMonth() === sun.getMonth()
-    ? `${sun.getDate()}`
-    : `${MONTHS[sun.getMonth()]} ${sun.getDate()}`;
-  return `${left} – ${right}, ${sun.getFullYear()}`;
+function weekLabel(start) {
+  const end = addDays(start, 6);
+  const left = `${MONTHS[start.getMonth()]} ${start.getDate()}`;
+  const right = start.getMonth() === end.getMonth()
+    ? `${end.getDate()}`
+    : `${MONTHS[end.getMonth()]} ${end.getDate()}`;
+  return `${left} – ${right}, ${end.getFullYear()}`;
 }
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -491,7 +489,7 @@ function setSchedule(schedule, weekStartIso, dayDates) {
     scheduleDayDates = {};
     DAYS.forEach(d => { scheduleDayDates[d] = nextOccurrenceIso(d); });
   }
-  viewedWeekStart = weekStartOf(new Date());
+  viewedWeekStart = todayStart();
   renderCalendar();
 }
 
@@ -525,15 +523,15 @@ function renderCalendar() {
   corner.className = "day-header corner";
   grid.appendChild(corner);
 
-  const colDates = COL_DAYS.map((_, i) => addDays(viewedWeekStart, i));
+  const colDates = Array.from({length: N_COLS}, (_, i) => addDays(viewedWeekStart, i));
 
-  COL_DAYS.forEach((d, i) => {
+  colDates.forEach((colDate, i) => {
     const h = document.createElement("div");
-    const dIso = isoDate(colDates[i]);
+    const dIso = isoDate(colDate);
     h.className = "day-header"
       + (dIso === todayIso ? " today" : "")
       + (dIso < todayIso ? " past" : "");
-    h.textContent = COL_SHORT[i];
+    h.textContent = COL_SHORT[colDate.getDay()];
     const dateEl = document.createElement("span");
     dateEl.className = "dh-date";
     dateEl.textContent = colDates[i].getDate();
@@ -554,7 +552,7 @@ function renderCalendar() {
   grid.appendChild(timeCol);
 
   // Day columns
-  COL_DAYS.forEach((day, di) => {
+  colDates.forEach((colDate, di) => {
     const col = document.createElement("div");
     const dIso = isoDate(colDates[di]);
     col.className = "day-col" + (dIso < todayIso ? " past" : "");
@@ -754,7 +752,7 @@ denyBtn.addEventListener("click", denySchedule);
 
 wkPrev.addEventListener("click", () => { viewedWeekStart = addDays(viewedWeekStart, -7); renderCalendar(); });
 wkNext.addEventListener("click", () => { viewedWeekStart = addDays(viewedWeekStart, 7); renderCalendar(); });
-wkToday.addEventListener("click", () => { viewedWeekStart = weekStartOf(new Date()); renderCalendar(); });
+wkToday.addEventListener("click", () => { viewedWeekStart = todayStart(); renderCalendar(); });
 
 adjustBtn.addEventListener("click", applyAdjustment);
 adjustInput.addEventListener("keydown", e => { if (e.key === "Enter") applyAdjustment(); });
