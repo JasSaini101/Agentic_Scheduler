@@ -20,7 +20,7 @@ def _parse_and_run(payload):
         goals = payload["goals"]
         write_calendar = payload.get("write_calendar", True)
 
-    schedule, user_config, agent_log = run_schedule(goals)
+    schedule, user_config, agent_log, constraints = run_schedule(goals)
     for line in agent_log:
         print(f"[graph] {line}")
 
@@ -31,8 +31,9 @@ def _parse_and_run(payload):
             write_schedule(schedule, user_config.calendar_id)
         except Exception as exc:
             calendar_error = f"Schedule built, but writing to Google Calendar failed: {exc}"
-    return schedule, user_config, calendar_error
+    return schedule, user_config, calendar_error, constraints
 
 
-# goals (str | dict) → (list[ScheduleEntry], UserConfig, calendar_error | None)
+# goals (str | dict) →
+#   (list[ScheduleEntry], UserConfig, calendar_error | None, ConstraintSet)
 pipeline = RunnableLambda(_parse_and_run)
