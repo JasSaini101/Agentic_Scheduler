@@ -168,6 +168,56 @@ def test_impossible_block_raises():
         solve(cs)
 
 
+def test_pinned_days_per_session():
+    """'Back to back days' — each session hard-pinned to its own day."""
+    cs = ConstraintSet(
+        requests=[ActivityRequest(name="tennis", category="sport", sessions=2,
+                                  session_hours=1.5,
+                                  pinned_days=["Saturday", "Sunday"])],
+        fill_window=(8.0, 22.0),
+    )
+    days = sorted(e.day for e in solve(cs).entries)
+    assert days == ["Saturday", "Sunday"]
+
+
+def test_patch_update_requests_resolves_change():
+    """The failing user scenario: +2 gym sessions at 12:00 or later, tennis
+    on consecutive days — expressed as a ConstraintPatch and re-solved."""
+    cs = ConstraintSet(
+        requests=[
+            ActivityRequest(name="gym", category="gym", sessions=2, session_hours=1.5,
+                            allowed_hours=[6, 7, 17, 18]),
+            ActivityRequest(name="tennis", category="sport", sessions=2, session_hours=1.5),
+        ],
+        exclusions=WORK,
+        fill_window=(6.0, 22.0),
+    )
+    patch = ConstraintPatch(update_requests={
+        "gym": {"sessions": 4, "allowed_hours": list(range(12, 21))},
+        "tennis": {"pinned_days": ["Saturday", "Sunday"]},
+    })
+    entries = solve(patch.apply(cs)).entries
+    gym_entries = [e for e in entries if e.category == "gym"]
+    assert len(gym_entries) == 4
+    assert all(e.start_hour >= 12 for e in gym_entries)
+    assert sorted(e.day for e in entries if e.category == "sport") == ["Saturday", "Sunday"]
+    assert find_conflicts(entries) == []
+
+
+def test_patch_add_and_remove_requests():
+    cs = ConstraintSet(
+        requests=[ActivityRequest(name="gym", category="gym", sessions=2, session_hours=1)],
+        fill_window=(8.0, 22.0),
+    )
+    patch = ConstraintPatch(
+        add_requests=[ActivityRequest(name="yoga", category="fill",
+                                      sessions=1, session_hours=1)],
+        remove_activities=["gym"],
+    )
+    entries = solve(patch.apply(cs)).entries
+    assert {e.label for e in entries} == {"Yoga"}
+
+
 def test_constraint_patch_pins_activity():
     cs = ConstraintSet(
         requests=[ActivityRequest(name="gym", category="gym", sessions=1, session_hours=1.5)],

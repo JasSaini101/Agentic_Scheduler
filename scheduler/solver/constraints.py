@@ -33,7 +33,8 @@ class ActivityRequest(BaseModel):
     sessions: int = 1
     session_hours: float = 1.0
     total_hours: float | None = None  # set → quota-based
-    pinned_day: str | None = None     # hard pin to one day
+    pinned_day: str | None = None     # hard pin to one day (all sessions)
+    pinned_days: list[str] = Field(default_factory=list)  # per-session pins: session i → pinned_days[i]
     allowed_hours: list[int] = Field(default_factory=list)  # candidate starts; empty → whole window
     max_chunk_hours: float = 4.0
     min_chunk_hours: float = 1.0
@@ -43,6 +44,9 @@ class ActivityRequest(BaseModel):
     def _check(self):
         if self.pinned_day is not None and self.pinned_day not in DAYS:
             raise ValueError(f"pinned_day must be one of {DAYS}, got {self.pinned_day!r}")
+        for d in self.pinned_days:
+            if d not in DAYS:
+                raise ValueError(f"pinned_days entries must be one of {DAYS}, got {d!r}")
         return self
 
 
@@ -73,22 +77,36 @@ class ConstraintSet(BaseModel):
 
 
 class ConstraintPatch(BaseModel):
-    """Critic feedback expressed as an edit to the ConstraintSet — the
-    revision loop re-solves after applying it, instead of hand-editing
-    the schedule."""
+    """An edit to a ConstraintSet, re-solved after applying. Used by the
+    critic's revision loop and by user change requests ("add two gym
+    sessions at 12 or later", "tennis on back to back days")."""
+    add_requests: list[ActivityRequest] = Field(default_factory=list)
     add_exclusions: list[HardExclusion] = Field(default_factory=list)
     add_preferences: list[SoftPreference] = Field(default_factory=list)
     pin_activity: dict[str, str] = Field(default_factory=dict)   # activity name → day
+    # activity name → field overrides on its ActivityRequest, e.g.
+    # {"gym": {"sessions": 4, "allowed_hours": [12, 13, ..., 21]}}
+    # {"tennis": {"pinned_days": ["Saturday", "Sunday"]}}
+    update_requests: dict[str, dict] = Field(default_factory=dict)
+    remove_activities: list[str] = Field(default_factory=list)
     rationale: str = ""
 
     def apply(self, cs: ConstraintSet) -> ConstraintSet:
+        updates = {k.lower(): v for k, v in self.update_requests.items()}
+        pins = {k.lower(): v for k, v in self.pin_activity.items()}
+        removals = {n.lower() for n in self.remove_activities}
         requests = []
         for req in cs.requests:
-            if req.name in self.pin_activity:
-                req = req.model_copy(update={"pinned_day": self.pin_activity[req.name]})
+            key = req.name.lower()
+            if key in removals:
+                continue
+            if key in updates:
+                req = req.model_copy(update=updates[key])
+            if key in pins:
+                req = req.model_copy(update={"pinned_day": pins[key]})
             requests.append(req)
         return ConstraintSet(
-            requests=requests,
+            requests=requests + self.add_requests,
             exclusions=cs.exclusions + self.add_exclusions,
             preferences=cs.preferences + self.add_preferences,
             fill_window=cs.fill_window,

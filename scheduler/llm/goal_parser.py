@@ -2,8 +2,8 @@
 Goal Parser
 ───────────
 Converts a natural language weekly goals string into a UserConfig object.
-Uses LangChain with ChatAnthropic + PydanticOutputParser for structured,
-validated output — no manual JSON parsing or markdown-fence stripping needed.
+Uses LangChain with ChatAnthropic structured output (a forced tool call) so
+the model cannot reply in prose — no manual JSON parsing needed.
 """
 
 import os
@@ -11,7 +11,6 @@ from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
 from scheduler.config import ActivityTarget, UserConfig
@@ -25,8 +24,6 @@ _DEFAULT_CANDIDATE_HOURS = {
 _SYSTEM_TEMPLATE = """\
 You are a scheduling assistant. Parse the user's weekly fitness and productivity goals into structured data.
 
-{format_instructions}
-
 Rules:
 - "gym" category: anything at a gym (weights, cardio machines, CrossFit, etc.)
 - "sport" category: outdoor or recreational sports (tennis, basketball, soccer, swimming, etc.)
@@ -35,7 +32,8 @@ Rules:
 - For session-based activities like "gym 3x", set sessions_per_week=3 and duration_hours=1.5
 - If the user pins an activity to a specific day (e.g. "casino on Friday", "tennis Saturday morning"), set "day" to that exact day name (Monday–Sunday). Otherwise set "day" to null.
 - Do not include candidate_hours — leave it as an empty list
-- fill_window should always be [8, 22] unless the user specifies otherwise\
+- fill_window should always be [8, 22] unless the user specifies otherwise
+- If the text is not a set of weekly goals (e.g. it is a change request against an existing schedule, a question, or unrelated text), return an empty activities list\
 """
 
 
@@ -61,12 +59,10 @@ def _build_chain():
             "Add it to your .env file."
         )
 
-    parser = PydanticOutputParser(pydantic_object=_ParsedConfig)
-
     prompt = ChatPromptTemplate.from_messages([
         ("system", _SYSTEM_TEMPLATE),
         ("human", "{goals}"),
-    ]).partial(format_instructions=parser.get_format_instructions())
+    ])
 
     llm = ChatAnthropic(
         model="claude-haiku-4-5-20251001",
@@ -74,13 +70,23 @@ def _build_chain():
         api_key=api_key,
     )
 
-    return (prompt | llm | parser).with_retry(stop_after_attempt=2)
+    # Structured output forces a tool call — the model structurally cannot
+    # answer with conversational prose instead of the schema.
+    return (prompt | llm.with_structured_output(_ParsedConfig)).with_retry(stop_after_attempt=2)
 
 
 def parse_goals(goals: str, calendar_id: str = "primary") -> UserConfig:
     """Parse a natural language goals string into a UserConfig."""
     chain = _build_chain()
     parsed: _ParsedConfig = chain.invoke({"goals": goals})
+
+    if not parsed.activities:
+        raise ValueError(
+            "Couldn't find any weekly goals in that text. If you meant to "
+            "change an existing proposal, use the ✗ Request changes box "
+            "instead — otherwise describe your full week, e.g. "
+            "\"gym 3x, tennis twice, 20h personal projects\"."
+        )
 
     activities = [
         ActivityTarget(

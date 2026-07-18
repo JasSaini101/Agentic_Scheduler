@@ -29,7 +29,9 @@ from pydantic import BaseModel, Field
 from scheduler.models import ScheduleEntry
 from scheduler.config import UserConfig
 from scheduler.llm.pipeline import pipeline
-from scheduler.llm.adjustment_handler import apply as apply_adjustment
+from scheduler.graph.adjust import apply_change
+from scheduler.graph.build import _default_llm
+from scheduler.solver import ConstraintSet, InfeasibleError
 from scheduler.data.providers.google_auth import SCOPES, credentials_config, save_token
 
 logger = logging.getLogger("agentic_scheduler")
@@ -82,10 +84,11 @@ def _check_rate_limit(request: Request) -> None:
 
 # ── Session store (write-through to disk so uvicorn/Render process restarts
 #    within the same container don't lose active schedules) ─────────────────
-# session_id → (schedule, user_config, confirmed)
+# session_id → (schedule, user_config, confirmed, constraints)
 # confirmed=False means the schedule is a proposal not yet written to Calendar.
+# constraints is the solver ConstraintSet — change requests patch it and re-solve.
 
-_sessions: dict[str, tuple[list[ScheduleEntry], UserConfig, bool]] = {}
+_sessions: dict[str, tuple[list[ScheduleEntry], UserConfig, bool, ConstraintSet | None]] = {}
 _SESSIONS_FILE = Path(tempfile.gettempdir()) / "agentic_scheduler_sessions.json"
 
 
@@ -96,8 +99,9 @@ def _persist_sessions() -> None:
                 "schedule": [e.model_dump() for e in schedule],
                 "config": config.model_dump(),
                 "confirmed": confirmed,
+                "constraints": constraints.model_dump() if constraints else None,
             }
-            for sid, (schedule, config, confirmed) in _sessions.items()
+            for sid, (schedule, config, confirmed, constraints) in _sessions.items()
         }
         _SESSIONS_FILE.write_text(json.dumps(data))
     except OSError as exc:
@@ -112,7 +116,9 @@ def _load_sessions() -> None:
         for sid, payload in data.items():
             schedule = [ScheduleEntry.model_validate(e) for e in payload["schedule"]]
             config = UserConfig.model_validate(payload["config"])
-            _sessions[sid] = (schedule, config, payload.get("confirmed", True))
+            raw_cs = payload.get("constraints")
+            constraints = ConstraintSet.model_validate(raw_cs) if raw_cs else None
+            _sessions[sid] = (schedule, config, payload.get("confirmed", True), constraints)
         logger.info("Restored %d session(s) from disk", len(_sessions))
     except Exception as exc:
         logger.warning("Could not restore sessions: %s", exc)
@@ -269,9 +275,13 @@ def build_schedule(req: ScheduleRequest, request: Request):
     try:
         # Preview mode: build the proposal without touching Google Calendar.
         # Events are written only when the user confirms via /api/confirm.
-        schedule, user_config, calendar_error = pipeline.invoke(
+        schedule, user_config, calendar_error, constraints = pipeline.invoke(
             {"goals": req.goals, "write_calendar": False}
         )
+    except ValueError as exc:
+        # Goal parsing rejected the input (e.g. a change request typed into
+        # the goals box) — the message is crafted to guide the user.
+        raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         # Solver infeasibility — a crafted, user-facing explanation
         if "feasible" in str(exc).lower():
@@ -289,7 +299,7 @@ def build_schedule(req: ScheduleRequest, request: Request):
         )
 
     session_id = str(uuid.uuid4())
-    _sessions[session_id] = (schedule, user_config, False)
+    _sessions[session_id] = (schedule, user_config, False, constraints)
     _persist_sessions()
 
     from scheduler.data.mock_week import DAYS, current_week_start, date_for_day
@@ -313,7 +323,7 @@ def confirm_schedule(req: ConfirmRequest):
             detail="Session expired — please rebuild your schedule.",
         )
 
-    schedule, user_config, _ = _sessions[req.session_id]
+    schedule, user_config, _, constraints = _sessions[req.session_id]
 
     try:
         from scheduler.data.providers.calendar_writer import write_schedule
@@ -325,7 +335,7 @@ def confirm_schedule(req: ConfirmRequest):
             detail="Could not write to Google Calendar. Check your connection and try again.",
         )
 
-    _sessions[req.session_id] = (schedule, user_config, True)
+    _sessions[req.session_id] = (schedule, user_config, True, constraints)
     _persist_sessions()
 
     written = sum(1 for e in schedule if e.category != "hard_block")
@@ -341,20 +351,38 @@ def adjust_schedule(req: AdjustRequest, request: Request):
         )
     _check_rate_limit(request)
 
-    schedule, user_config, confirmed = _sessions[req.session_id]
+    schedule, user_config, confirmed, constraints = _sessions[req.session_id]
+    if constraints is None:
+        # Session predates the constraint engine — nothing to patch against.
+        raise HTTPException(
+            status_code=404,
+            detail="Session expired — please rebuild your schedule.",
+        )
 
     try:
-        # Before confirmation nothing is on the calendar, so edit in memory only;
-        # after confirmation keep Google Calendar in sync with each change.
-        updated = apply_adjustment(req.change, schedule, user_config, sync_calendar=confirmed)
+        # Change request → ConstraintPatch → CP-SAT re-solve of the whole week.
+        updated, new_constraints, unplaced = apply_change(
+            req.change, schedule, constraints, llm=_default_llm())
+    except InfeasibleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception:
         logger.exception("Adjustment failed")
         raise HTTPException(
             status_code=500,
             detail="Could not apply that change. Try rephrasing it.",
         )
+    for shortfall in unplaced:
+        logger.info("[adjust] could not fit: %s", shortfall)
 
-    _sessions[req.session_id] = (updated, user_config, confirmed)
+    if confirmed:
+        # Already on the calendar — keep Google Calendar in sync with the change.
+        try:
+            from scheduler.data.providers.calendar_writer import write_schedule
+            write_schedule(updated, user_config.calendar_id)
+        except Exception:
+            logger.exception("Calendar sync failed after adjustment")
+
+    _sessions[req.session_id] = (updated, user_config, confirmed, new_constraints)
     _persist_sessions()
     return AdjustResponse(schedule=updated, confirmed=confirmed)
 
@@ -363,7 +391,7 @@ def adjust_schedule(req: AdjustRequest, request: Request):
 def get_schedule(session_id: str):
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    schedule, config, confirmed = _sessions[session_id]
+    schedule, config, confirmed, _constraints = _sessions[session_id]
     return {"schedule": schedule, "config": config, "confirmed": confirmed}
 
 

@@ -79,7 +79,7 @@ def solve(cs: ConstraintSet, time_limit_s: float = 10.0) -> SolveResult:
     blocks = []
 
     for req in cs.requests:
-        for dur_h in _chunk_hours(req):
+        for ci, dur_h in enumerate(_chunk_hours(req)):
             dur = _to_slots(dur_h)
             lo, hi = win_lo, win_hi - dur
             if req.allowed_hours:
@@ -101,6 +101,8 @@ def solve(cs: ConstraintSet, time_limit_s: float = 10.0) -> SolveResult:
             day = model.NewIntVar(0, 6, f"day_{len(blocks)}")
             if req.pinned_day:
                 model.Add(day == DAYS.index(req.pinned_day))
+            elif ci < len(req.pinned_days):
+                model.Add(day == DAYS.index(req.pinned_days[ci]))
 
             onehot = [model.NewBoolVar(f"d{d}_{len(blocks)}") for d in range(7)]
             model.AddExactlyOne(onehot)

@@ -123,9 +123,11 @@ def default_graph():
     return build_graph()
 
 
-def run_schedule(goals: str) -> tuple[list, object, list[str]]:
-    """Convenience entry: goals → (entries, user_config, agent_log).
+def run_schedule(goals: str) -> tuple[list, object, list[str], object]:
+    """Convenience entry: goals → (entries, user_config, agent_log, constraints).
 
+    The final ConstraintSet is returned so callers can apply user change
+    requests as constraint patches and re-solve (see scheduler.graph.adjust).
     Raises RuntimeError with the solver's explanation when the requested
     goals cannot fit in the week."""
     result = default_graph().invoke({
@@ -137,4 +139,5 @@ def run_schedule(goals: str) -> tuple[list, object, list[str]]:
     })
     if result.get("infeasible"):
         raise RuntimeError(result["infeasible"])
-    return result["entries"], result["user_config"], result.get("agent_log", [])
+    return (result["entries"], result["user_config"],
+            result.get("agent_log", []), result.get("constraints"))
