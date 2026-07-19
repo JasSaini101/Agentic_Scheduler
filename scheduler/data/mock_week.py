@@ -7,14 +7,33 @@ Each piece maps to a future data source:
   - hard_events   → Google Calendar API
 """
 
-from datetime import date, time, timedelta
+import os
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+
+def local_today() -> date:
+    """Today in the USER'S timezone (SCHEDULER_TZ env, e.g. America/Los_Angeles).
+
+    The server may run in UTC (Render, containers), where the date ticks over
+    up to a day before the user's local date — without this, evening requests
+    resolve "today" and day names one day ahead of what the browser shows.
+    Falls back to the server-local date when SCHEDULER_TZ is unset/invalid."""
+    tz = os.getenv("SCHEDULER_TZ")
+    if tz:
+        try:
+            return datetime.now(ZoneInfo(tz)).date()
+        except Exception:
+            pass
+    return date.today()
+
 
 # ── Week definition ───────────────────────────────────────────────────────────
 # Start date for the schedule — always the Monday of the current week.
 # Use current_week_start() at call time; a long-lived server process would
 # otherwise freeze the week at whatever it was when the module was imported.
 def current_week_start() -> date:
-    today = date.today()
+    today = local_today()
     return today - timedelta(days=today.weekday())
 
 
@@ -23,7 +42,7 @@ def date_for_day(day_name: str, today: date | None = None) -> date:
 
     The scheduler works on a rolling 7-day window: "Friday" always means the
     upcoming Friday (or today, if today is Friday) — never a day already past."""
-    today = today or date.today()
+    today = today or local_today()
     delta = (DAYS.index(day_name) - today.weekday()) % 7
     return today + timedelta(days=delta)
 

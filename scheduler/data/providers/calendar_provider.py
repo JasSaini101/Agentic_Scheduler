@@ -16,14 +16,12 @@ Returns a list matching the HARD_EVENTS mock schema:
 import os
 from datetime import datetime, timezone, timedelta
 
-from datetime import date
-
-from scheduler.data.mock_week import DAYS
+from scheduler.data.mock_week import DAYS, local_today
 
 
 def _day_names_by_date() -> dict[str, str]:
     """Map ISO date → day name for the rolling window [today, today+6]."""
-    today = date.today()
+    today = local_today()
     return {
         (today + timedelta(days=i)).isoformat(): DAYS[(today + timedelta(days=i)).weekday()]
         for i in range(7)
@@ -55,7 +53,7 @@ def fetch_hard_events() -> list[dict]:
     calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
     service = _get_service()
 
-    window_start = date.today()
+    window_start = local_today()
     day_names = _day_names_by_date()
     window_end = window_start + timedelta(days=7)
     time_min = datetime(window_start.year, window_start.month, window_start.day,

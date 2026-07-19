@@ -28,6 +28,12 @@ def _day_to_date(day_name: str) -> str:
     return date_for_day(day_name).isoformat()
 
 
+def _event_tz() -> str:
+    """Timezone written on Google Calendar events — follows SCHEDULER_TZ."""
+    import os
+    return os.getenv("SCHEDULER_TZ", "America/New_York")
+
+
 def _hhmm(hour: float) -> str:
     """Fractional hour → 'HH:MM' (9.5 → '09:30')."""
     h = int(hour)
@@ -37,7 +43,8 @@ def _hhmm(hour: float) -> str:
 
 def _delete_scheduler_events(service, calendar_id: str) -> None:
     """Delete scheduler-tagged events in the upcoming 7-day window."""
-    window_start = date.today()
+    from scheduler.data.mock_week import local_today
+    window_start = local_today()
     week_start_dt = datetime.combine(window_start, datetime.min.time()).isoformat() + "Z"
     week_end = window_start + timedelta(days=7)
     week_end_dt = datetime.combine(week_end, datetime.min.time()).isoformat() + "Z"
@@ -92,8 +99,8 @@ def write_schedule(entries: list[ScheduleEntry], calendar_id: str = "primary", r
         event = {
             "summary": entry.label,
             "description": description,
-            "start": {"dateTime": start_dt, "timeZone": "America/New_York"},
-            "end": {"dateTime": end_dt, "timeZone": "America/New_York"},
+            "start": {"dateTime": start_dt, "timeZone": _event_tz()},
+            "end": {"dateTime": end_dt, "timeZone": _event_tz()},
             "extendedProperties": {
                 "private": {
                     "source": _SOURCE_TAG,
