@@ -34,8 +34,8 @@ def fetch_sleep_scores() -> dict:
     if not token:
         raise RuntimeError("OURA_ACCESS_TOKEN not set")
 
-    from datetime import date as _date
-    week_start = _date.today()
+    from scheduler.data.mock_week import local_today
+    week_start = local_today()
     week_end = week_start + timedelta(days=7)
     resp = requests.get(
         _API_BASE,
