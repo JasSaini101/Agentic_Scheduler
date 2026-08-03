@@ -403,4 +403,7 @@ app.mount("/static", StaticFiles(directory=_static), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(_static / "index.html")
+    # no-cache: browsers must revalidate the app shell on every load, so UI
+    # changes appear on a normal reload instead of requiring a hard refresh
+    return FileResponse(_static / "index.html",
+                        headers={"Cache-Control": "no-cache"})
