@@ -12,4 +12,6 @@ langchain-core==1.4.8
 langgraph==1.2.7
 ortools==9.15.6755
 pydantic==2.13.4
+itsdangerous==2.2.0
+psycopg[binary]==3.2.13
 populartimes @ git+https://github.com/m-wrzr/populartimes.git

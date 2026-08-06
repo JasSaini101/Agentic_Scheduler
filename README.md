@@ -67,9 +67,40 @@ pytest tests/ -q
 
 The suite is hermetic: graph tests run with `llm=None` (deterministic agent fallbacks) and injectable parse/patch functions, so CI needs no API keys. A separate LLM-gated eval suite (`tests/test_goal_parser_evals.py`) exercises real goal parsing when `ANTHROPIC_API_KEY` is set. GitHub Actions runs the hermetic suite on every push.
 
-## Deployment
+## Multi-user
 
-[`render.yaml`](render.yaml) deploys the web app to Render. Set the env vars from [`.env.example`](.env.example) in the dashboard — in particular `SCHEDULER_TZ` (Render runs UTC) and the Google credential/token JSON blobs for calendar access.
+The app is multi-user: each person signs in with Google, and their calendar
+token and schedule sessions are stored per account — one user's schedule can
+never touch another user's calendar. Access is controlled two ways:
+
+- **`AUTHORIZED_EMAILS`** — comma-separated allowlist checked at sign-in
+  (empty = anyone who can complete the OAuth flow).
+- **Google OAuth test users** — while the OAuth app is unverified, each
+  invitee must also be added under *APIs & Services → OAuth consent screen →
+  Test users* in Google Cloud Console (cap: 100).
+
+## Deployment (runs 24/7, no laptop required)
+
+[`render.yaml`](render.yaml) deploys the web app to Render's free tier;
+pushing to `main` redeploys automatically. One-time setup:
+
+1. **Database** — create a free Postgres at [neon.tech](https://neon.tech)
+   and copy its connection string. (Render's free tier has no persistent
+   disk, so tokens/sessions live here. Locally, a SQLite file is used and
+   no `DATABASE_URL` is needed.)
+2. **Render** — *New → Blueprint*, point it at this repo. Fill the env vars
+   from [`.env.example`](.env.example): `ANTHROPIC_API_KEY`,
+   `GOOGLE_CREDENTIALS_JSON` (paste `credentials.json` contents),
+   `BASE_URL` (your `https://<app>.onrender.com`), `DATABASE_URL` (Neon),
+   `AUTHORIZED_EMAILS`, `SCHEDULER_TZ` (Render runs UTC), and optionally
+   `OPENWEATHERMAP_API_KEY`. `SESSION_SECRET` is auto-generated.
+3. **Google Cloud Console** — add
+   `https://<app>.onrender.com/auth/callback` to the OAuth client's
+   authorized redirect URIs, and add invitees as test users (above).
+
+Free-tier note: the service sleeps after ~15 min idle, so the first request
+after a quiet spell takes ~30–60 s to wake. An external uptime pinger hitting
+`/api/auth-status` every 10 minutes keeps it warm if that bothers you.
 
 ## Project layout
 

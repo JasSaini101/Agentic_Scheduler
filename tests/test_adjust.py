@@ -63,13 +63,15 @@ def test_schedule_endpoint_422_on_change_request_text(monkeypatch):
     """Change-request text typed into the goals box → guidance, not a 500."""
     import web.app as webapp
 
-    monkeypatch.setattr(webapp, "_is_authorized", lambda: True)
+    monkeypatch.setattr(webapp, "_is_authorized", lambda user: True)
 
     def fake_invoke(payload):
         raise ValueError("Couldn't find any weekly goals in that text.")
     monkeypatch.setattr(webapp.pipeline, "invoke", fake_invoke)
 
     client = TestClient(webapp.app)
+    client.cookies.set(
+        webapp._COOKIE_NAME, webapp._serializer().dumps("test@example.com"))
     res = client.post("/api/schedule", json={
         "goals": "Add two gym sessions at 12 or later in the day"})
     assert res.status_code == 422

@@ -4,14 +4,21 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn web.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/auth-status
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_CREDENTIALS_JSON
         sync: false
-      - key: GOOGLE_TOKEN_JSON
-        sync: false
       - key: BASE_URL
         sync: false
       - key: OPENWEATHERMAP_API_KEY
+        sync: false
+      - key: SCHEDULER_TZ
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: AUTHORIZED_EMAILS
         sync: false

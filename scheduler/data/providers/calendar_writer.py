@@ -72,14 +72,15 @@ def _delete_scheduler_events(service, calendar_id: str) -> None:
         print(f"[calendar_writer] Deleted {deleted} existing scheduler event(s)")
 
 
-def write_schedule(entries: list[ScheduleEntry], calendar_id: str = "primary", replace: bool = True) -> None:
-    """Write ScheduleEntry list to Google Calendar.
+def write_schedule(entries: list[ScheduleEntry], calendar_id: str = "primary",
+                   replace: bool = True, user_email: str | None = None) -> None:
+    """Write ScheduleEntry list to this user's Google Calendar.
 
     replace=True clears prior scheduler-created events first (full rebuild);
     replace=False appends without deleting (e.g. adding one event mid-week).
     hard_block entries mirror events that already exist in the calendar —
     writing them would duplicate them, so they are skipped."""
-    service = _get_service()
+    service = _get_service(user_email)
     if replace:
         _delete_scheduler_events(service, calendar_id)
 

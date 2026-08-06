@@ -28,9 +28,9 @@ def _day_names_by_date() -> dict[str, str]:
     }
 
 
-def _get_service():
+def _get_service(user_email: str | None = None):
     from scheduler.data.providers.google_auth import get_service
-    return get_service()
+    return get_service(user_email)
 
 
 def _event_type(event: dict) -> str:
@@ -45,13 +45,15 @@ def _event_type(event: dict) -> str:
     return "calendar"
 
 
-def fetch_hard_events() -> list[dict]:
+def fetch_hard_events(user_email: str | None = None,
+                      calendar_id: str | None = None) -> list[dict]:
     """
     Returns a list of hard events for WEEK_START through WEEK_START+7 days.
     Raises RuntimeError if credentials are missing or the API call fails.
     """
-    calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
-    service = _get_service()
+    if calendar_id is None:
+        calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
+    service = _get_service(user_email)
 
     window_start = local_today()
     day_names = _day_names_by_date()

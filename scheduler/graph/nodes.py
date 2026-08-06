@@ -99,7 +99,7 @@ def make_parse_node(parse_fn):
 def context_node(state: ScheduleState) -> dict:
     if state.get("week_context"):
         return {"agent_log": ["[context] week_context supplied — skipping load"]}
-    return {"week_context": build_week_context(),
+    return {"week_context": build_week_context(state.get("user_email")),
             "agent_log": ["[context] loaded weather / calendar / sleep / busyness"]}
 
 

@@ -20,9 +20,9 @@ from scheduler.data.mock_week import (
 )
 
 
-def build_week_context() -> dict:
+def build_week_context(user_email: str | None = None) -> dict:
     context = {
-        "hard_events":  _load_hard_events(),
+        "hard_events":  _load_hard_events(user_email),
         "weather":      _load_weather(),
         "sleep_scores": SLEEP_SCORES,   # mock only — no live API
         "gym_busyness": GYM_BUSYNESS,   # mock only — Popular Times unavailable for this location
@@ -30,10 +30,10 @@ def build_week_context() -> dict:
     return context
 
 
-def _load_hard_events() -> list[dict]:
+def _load_hard_events(user_email: str | None = None) -> list[dict]:
     try:
         from scheduler.data.providers.calendar_provider import fetch_hard_events
-        events = fetch_hard_events()
+        events = fetch_hard_events(user_email)
         print("[week_context] Google Calendar: loaded live hard events")
         return events
     except BaseException as exc:
