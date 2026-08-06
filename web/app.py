@@ -5,12 +5,10 @@ Agentic Scheduler — FastAPI Web Backend
 import uuid
 import sys
 import os
-import json
 import time
 import hashlib
 import base64
 import logging
-import tempfile
 import secrets as _secrets
 from collections import defaultdict, deque
 from pathlib import Path
@@ -21,11 +19,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel, Field
 
+from scheduler import store
 from scheduler.models import ScheduleEntry
 from scheduler.config import UserConfig
 from scheduler.llm.pipeline import pipeline
@@ -38,6 +38,7 @@ logger = logging.getLogger("agentic_scheduler")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Agentic Scheduler")
+store.init()
 
 
 @app.middleware("http")
@@ -82,49 +83,91 @@ def _check_rate_limit(request: Request) -> None:
     bucket.append(now)
 
 
-# ── Session store (write-through to disk so uvicorn/Render process restarts
-#    within the same container don't lose active schedules) ─────────────────
-# session_id → (schedule, user_config, confirmed, constraints)
+# ── User identity (signed cookie) ──────────────────────────────────────────
+# The Google OAuth flow establishes who the user is; a signed HttpOnly cookie
+# carries their email between requests. Tokens and schedule sessions live in
+# the scheduler store, keyed by that email — never shared between users.
+
+_COOKIE_NAME = "scheduler_user"
+_COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
+
+
+def _serializer() -> URLSafeTimedSerializer:
+    secret = os.getenv("SESSION_SECRET")
+    if not secret:
+        # Local dev convenience: derive a per-process secret. Cookies won't
+        # survive a restart — set SESSION_SECRET for anything real.
+        secret = globals().setdefault("_dev_secret", _secrets.token_urlsafe(32))
+    return URLSafeTimedSerializer(secret, salt="scheduler-user")
+
+
+def current_user(request: Request) -> str | None:
+    """Email from the signed cookie, or None if absent/invalid/expired."""
+    raw = request.cookies.get(_COOKIE_NAME)
+    if not raw:
+        return None
+    try:
+        return _serializer().loads(raw, max_age=_COOKIE_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+def _require_user(request: Request) -> str:
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not_authorized")
+    return user
+
+
+def _set_user_cookie(response: Response, email: str) -> None:
+    response.set_cookie(
+        _COOKIE_NAME,
+        _serializer().dumps(email),
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=_base_url().startswith("https"),
+        samesite="lax",
+    )
+
+
+def _allowed(email: str) -> bool:
+    """AUTHORIZED_EMAILS allowlist (comma-separated). Unset = open."""
+    raw = os.getenv("AUTHORIZED_EMAILS", "").strip()
+    if not raw:
+        return True
+    allowed = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    return email.lower() in allowed
+
+
+# ── Schedule sessions (store-backed) ───────────────────────────────────────
 # confirmed=False means the schedule is a proposal not yet written to Calendar.
 # constraints is the solver ConstraintSet — change requests patch it and re-solve.
 
-_sessions: dict[str, tuple[list[ScheduleEntry], UserConfig, bool, ConstraintSet | None]] = {}
-_SESSIONS_FILE = Path(tempfile.gettempdir()) / "agentic_scheduler_sessions.json"
+def _save_session(session_id: str, user_email: str, schedule: list[ScheduleEntry],
+                  config: UserConfig, confirmed: bool,
+                  constraints: ConstraintSet | None) -> None:
+    store.save_session(
+        session_id, user_email,
+        [e.model_dump() for e in schedule],
+        config.model_dump(),
+        confirmed,
+        constraints.model_dump() if constraints else None,
+    )
 
 
-def _persist_sessions() -> None:
-    try:
-        data = {
-            sid: {
-                "schedule": [e.model_dump() for e in schedule],
-                "config": config.model_dump(),
-                "confirmed": confirmed,
-                "constraints": constraints.model_dump() if constraints else None,
-            }
-            for sid, (schedule, config, confirmed, constraints) in _sessions.items()
-        }
-        _SESSIONS_FILE.write_text(json.dumps(data))
-    except OSError as exc:
-        logger.warning("Could not persist sessions: %s", exc)
+def _load_session(session_id: str, user_email: str):
+    """Return (schedule, config, confirmed, constraints) or None.
 
-
-def _load_sessions() -> None:
-    if not _SESSIONS_FILE.exists():
-        return
-    try:
-        data = json.loads(_SESSIONS_FILE.read_text())
-        for sid, payload in data.items():
-            schedule = [ScheduleEntry.model_validate(e) for e in payload["schedule"]]
-            config = UserConfig.model_validate(payload["config"])
-            raw_cs = payload.get("constraints")
-            constraints = ConstraintSet.model_validate(raw_cs) if raw_cs else None
-            _sessions[sid] = (schedule, config, payload.get("confirmed", True), constraints)
-        logger.info("Restored %d session(s) from disk", len(_sessions))
-    except Exception as exc:
-        logger.warning("Could not restore sessions: %s", exc)
-
-
-_load_sessions()
+    Sessions are private: a session belonging to another user is treated
+    as nonexistent rather than revealing that the id is in use."""
+    row = store.load_session(session_id)
+    if row is None or row["user_email"] != user_email:
+        return None
+    schedule = [ScheduleEntry.model_validate(e) for e in row["schedule"]]
+    config = UserConfig.model_validate(row["config"])
+    constraints = (ConstraintSet.model_validate(row["constraints"])
+                   if row["constraints"] else None)
+    return schedule, config, row["confirmed"], constraints
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -141,10 +184,13 @@ def _base_url() -> str:
     return os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 
 
-def _is_authorized() -> bool:
+def _is_authorized(user_email: str | None) -> bool:
+    """True if this user has a valid (or refreshable) Google token."""
+    if not user_email:
+        return False
     try:
         from scheduler.data.providers.google_auth import get_credentials
-        get_credentials()
+        get_credentials(user_email)
         return True
     except Exception:
         return False
@@ -221,7 +267,7 @@ def auth_google():
 
 @app.get("/auth/callback")
 def auth_callback(code: str, state: str = ""):
-    """Exchange the authorization code for tokens and persist them."""
+    """Exchange the code for tokens, identify the user, persist per-user."""
     # Extract verifier from composite state "<verifier>.<csrf>"
     code_verifier = state.split(".", 1)[0] if state and "." in state else None
     try:
@@ -236,39 +282,39 @@ def auth_callback(code: str, state: str = ""):
         redirect_uri=f"{_base_url()}/auth/callback",
     )
     flow.fetch_token(code=code, code_verifier=code_verifier)
-    save_token(flow.credentials.to_json())
 
-    return RedirectResponse("/?authorized=1")
+    # Who just signed in? (email scope is part of SCOPES)
+    from google.auth.transport.requests import AuthorizedSession
+    userinfo = AuthorizedSession(flow.credentials).get(
+        "https://www.googleapis.com/oauth2/v2/userinfo"
+    ).json()
+    email = (userinfo.get("email") or "").lower()
+    if not email:
+        raise HTTPException(status_code=502, detail="Google did not return an email.")
+
+    if not _allowed(email):
+        logger.info("Sign-in rejected (not on allowlist): %s", email)
+        return RedirectResponse("/?denied=1")
+
+    save_token(email, flow.credentials.to_json())
+
+    response = RedirectResponse("/?authorized=1")
+    _set_user_cookie(response, email)
+    return response
 
 
 @app.get("/api/auth-status")
-def auth_status():
-    return {"authorized": _is_authorized()}
-
-
-@app.get("/api/token")
-def get_token(key: str = ""):
-    """
-    One-time export of the token JSON (to set GOOGLE_TOKEN_JSON on Render).
-    Disabled unless the TOKEN_EXPORT_KEY env var is set; caller must pass
-    the matching ?key= value. Never leave TOKEN_EXPORT_KEY set permanently.
-    """
-    export_key = os.getenv("TOKEN_EXPORT_KEY")
-    if not export_key or not _secrets.compare_digest(key, export_key):
-        raise HTTPException(status_code=404, detail="Not found")
-
-    from scheduler.data.providers.google_auth import _token_json
-    raw = _token_json()
-    if not raw:
-        raise HTTPException(status_code=404, detail="No token found — authorize first.")
-    return {"token_json": raw}
+def auth_status(request: Request):
+    user = current_user(request)
+    return {"authorized": _is_authorized(user), "email": user}
 
 
 # ── Schedule endpoints ─────────────────────────────────────────────────────
 
 @app.post("/api/schedule", response_model=ScheduleResponse)
 def build_schedule(req: ScheduleRequest, request: Request):
-    if not _is_authorized():
+    user = _require_user(request)
+    if not _is_authorized(user):
         raise HTTPException(status_code=401, detail="not_authorized")
     _check_rate_limit(request)
 
@@ -276,7 +322,7 @@ def build_schedule(req: ScheduleRequest, request: Request):
         # Preview mode: build the proposal without touching Google Calendar.
         # Events are written only when the user confirms via /api/confirm.
         schedule, user_config, calendar_error, constraints = pipeline.invoke(
-            {"goals": req.goals, "write_calendar": False}
+            {"goals": req.goals, "write_calendar": False, "user_email": user}
         )
     except ValueError as exc:
         # Goal parsing rejected the input (e.g. a change request typed into
@@ -299,8 +345,7 @@ def build_schedule(req: ScheduleRequest, request: Request):
         )
 
     session_id = str(uuid.uuid4())
-    _sessions[session_id] = (schedule, user_config, False, constraints)
-    _persist_sessions()
+    _save_session(session_id, user, schedule, user_config, False, constraints)
 
     from scheduler.data.mock_week import DAYS, current_week_start, date_for_day
     return ScheduleResponse(
@@ -316,18 +361,19 @@ def build_schedule(req: ScheduleRequest, request: Request):
 
 
 @app.post("/api/confirm", response_model=ConfirmResponse)
-def confirm_schedule(req: ConfirmRequest):
-    if req.session_id not in _sessions:
+def confirm_schedule(req: ConfirmRequest, request: Request):
+    user = _require_user(request)
+    row = _load_session(req.session_id, user)
+    if row is None:
         raise HTTPException(
             status_code=404,
             detail="Session expired — please rebuild your schedule.",
         )
-
-    schedule, user_config, _, constraints = _sessions[req.session_id]
+    schedule, user_config, _, constraints = row
 
     try:
         from scheduler.data.providers.calendar_writer import write_schedule
-        write_schedule(schedule, user_config.calendar_id)
+        write_schedule(schedule, user_config.calendar_id, user_email=user)
     except Exception:
         logger.exception("Calendar write failed on confirm")
         raise HTTPException(
@@ -335,8 +381,7 @@ def confirm_schedule(req: ConfirmRequest):
             detail="Could not write to Google Calendar. Check your connection and try again.",
         )
 
-    _sessions[req.session_id] = (schedule, user_config, True, constraints)
-    _persist_sessions()
+    _save_session(req.session_id, user, schedule, user_config, True, constraints)
 
     written = sum(1 for e in schedule if e.category != "hard_block")
     return ConfirmResponse(confirmed=True, events_written=written)
@@ -344,14 +389,16 @@ def confirm_schedule(req: ConfirmRequest):
 
 @app.post("/api/adjust", response_model=AdjustResponse)
 def adjust_schedule(req: AdjustRequest, request: Request):
-    if req.session_id not in _sessions:
+    user = _require_user(request)
+    row = _load_session(req.session_id, user)
+    if row is None:
         raise HTTPException(
             status_code=404,
             detail="Session expired — please rebuild your schedule.",
         )
     _check_rate_limit(request)
 
-    schedule, user_config, confirmed, constraints = _sessions[req.session_id]
+    schedule, user_config, confirmed, constraints = row
     if constraints is None:
         # Session predates the constraint engine — nothing to patch against.
         raise HTTPException(
@@ -378,20 +425,21 @@ def adjust_schedule(req: AdjustRequest, request: Request):
         # Already on the calendar — keep Google Calendar in sync with the change.
         try:
             from scheduler.data.providers.calendar_writer import write_schedule
-            write_schedule(updated, user_config.calendar_id)
+            write_schedule(updated, user_config.calendar_id, user_email=user)
         except Exception:
             logger.exception("Calendar sync failed after adjustment")
 
-    _sessions[req.session_id] = (updated, user_config, confirmed, new_constraints)
-    _persist_sessions()
+    _save_session(req.session_id, user, updated, user_config, confirmed, new_constraints)
     return AdjustResponse(schedule=updated, confirmed=confirmed)
 
 
 @app.get("/api/schedule/{session_id}")
-def get_schedule(session_id: str):
-    if session_id not in _sessions:
+def get_schedule(session_id: str, request: Request):
+    user = _require_user(request)
+    row = _load_session(session_id, user)
+    if row is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    schedule, config, confirmed, _constraints = _sessions[session_id]
+    schedule, config, confirmed, _constraints = row
     return {"schedule": schedule, "config": config, "confirmed": confirmed}
 
 

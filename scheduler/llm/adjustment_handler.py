@@ -65,10 +65,11 @@ def _parse_actions(change_text: str, schedule: list[ScheduleEntry]) -> list[dict
     return chain.invoke({"schedule_summary": schedule_summary, "change_text": change_text})
 
 
-def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str) -> None:
+def _delete_calendar_event(entry: ScheduleEntry, calendar_id: str,
+                           user_email: str | None = None) -> None:
     try:
         from scheduler.data.providers.google_auth import get_service
-        service = get_service()
+        service = get_service(user_email)
         from scheduler.data.mock_week import date_for_day
 
         date_str = date_for_day(entry.day).isoformat()
@@ -157,6 +158,7 @@ def apply(
     schedule: list[ScheduleEntry],
     user_config: UserConfig,
     sync_calendar: bool = True,
+    user_email: str | None = None,
 ) -> list[ScheduleEntry]:
     """Parse the NL change and apply remove/add actions.
 
@@ -177,7 +179,7 @@ def apply(
             ]
             for entry in to_remove:
                 if sync_calendar:
-                    _delete_calendar_event(entry, user_config.calendar_id)
+                    _delete_calendar_event(entry, user_config.calendar_id, user_email)
                 result.remove(entry)
                 print(f"  [adjustment] Removed: {entry.label} on {entry.day}")
 
@@ -191,7 +193,8 @@ def apply(
                 if sync_calendar:
                     try:
                         from scheduler.data.providers.calendar_writer import write_schedule
-                        write_schedule([new_entry], user_config.calendar_id, replace=False)
+                        write_schedule([new_entry], user_config.calendar_id,
+                                       replace=False, user_email=user_email)
                     except BaseException as exc:
                         warnings.warn(f"[adjustment] Could not write new event to calendar: {exc}")
 

@@ -123,7 +123,7 @@ def default_graph():
     return build_graph()
 
 
-def run_schedule(goals: str) -> tuple[list, object, list[str], object]:
+def run_schedule(goals: str, user_email: str | None = None) -> tuple[list, object, list[str], object]:
     """Convenience entry: goals → (entries, user_config, agent_log, constraints).
 
     The final ConstraintSet is returned so callers can apply user change
@@ -132,6 +132,7 @@ def run_schedule(goals: str) -> tuple[list, object, list[str], object]:
     goals cannot fit in the week."""
     result = default_graph().invoke({
         "goals": goals,
+        "user_email": user_email,
         "entries": [],
         "agent_log": [],
         "done_agents": [],

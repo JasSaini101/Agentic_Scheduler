@@ -602,28 +602,38 @@ function renderCalendar() {
 async function checkAuth() {
   try {
     const res = await fetch("/api/auth-status");
-    const { authorized } = await res.json();
+    const { authorized, email } = await res.json();
     calendarAuthorized = authorized;
     if (authorized) {
       authBanner.classList.remove("visible");
       authIndicator.className = "ok";
-      authIndicator.textContent = "Calendar: connected";
+      authIndicator.textContent = email ? `Signed in: ${email}` : "Calendar: connected";
       setStatus("Enter your weekly goals above to get started.");
     } else {
       authBanner.classList.add("visible");
       authIndicator.className = "no";
       authIndicator.textContent = "Calendar: not connected";
-      setStatus("Connect your Google Calendar above before building a schedule.");
+      if (accessDenied) {
+        setStatus("This Google account isn't on the invite list yet — contact the owner for access.", true);
+      } else {
+        setStatus("Connect your Google Calendar above before building a schedule.");
+      }
     }
   } catch (_) {}
 }
 
-// Check auth on load; also handle ?authorized=1 redirect from OAuth callback
-checkAuth();
-renderCalendar();   // show the dated week grid immediately, even before a schedule
-if (new URLSearchParams(location.search).get("authorized") === "1") {
+// Handle OAuth callback redirects, then check auth on load
+const _qs = new URLSearchParams(location.search);
+let accessDenied = false;
+if (_qs.get("authorized") === "1") {
   history.replaceState({}, "", "/");
 }
+if (_qs.get("denied") === "1") {
+  history.replaceState({}, "", "/");
+  accessDenied = true;
+}
+checkAuth();
+renderCalendar();   // show the dated week grid immediately, even before a schedule
 
 // ── API calls ─────────────────────────────────────────────────────────────
 async function buildSchedule() {
