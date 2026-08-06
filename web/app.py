@@ -311,6 +311,39 @@ def auth_status(request: Request):
 
 # ── Schedule endpoints ─────────────────────────────────────────────────────
 
+@app.get("/api/calendar")
+def current_calendar(request: Request):
+    """Existing Google Calendar events for the rolling week, as hard-block
+    entries — lets the UI show the current calendar before any proposal."""
+    user = _require_user(request)
+
+    from scheduler.data.mock_week import DAYS, current_week_start, date_for_day
+    week_start = current_week_start().isoformat()
+    day_dates = {d: date_for_day(d).isoformat() for d in DAYS}
+
+    try:
+        from scheduler.data.providers.calendar_provider import fetch_hard_events
+        events = fetch_hard_events(user)
+    except Exception:
+        # Not authorized yet / Google API hiccup — empty grid, not a 500.
+        return {"schedule": [], "week_start": week_start,
+                "day_dates": day_dates, "synced": False}
+
+    schedule = [
+        {
+            "day": e["day"],
+            "start_hour": e["start_hour"],
+            "end_hour": e["end_hour"],
+            "label": e["label"],
+            "category": "hard_block",
+            "reasons": [],
+        }
+        for e in events
+    ]
+    return {"schedule": schedule, "week_start": week_start,
+            "day_dates": day_dates, "synced": True}
+
+
 @app.post("/api/schedule", response_model=ScheduleResponse)
 def build_schedule(req: ScheduleRequest, request: Request):
     user = _require_user(request)

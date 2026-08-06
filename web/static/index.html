@@ -609,6 +609,7 @@ async function checkAuth() {
       authIndicator.className = "ok";
       authIndicator.textContent = email ? `Signed in: ${email}` : "Calendar: connected";
       setStatus("Enter your weekly goals above to get started.");
+      loadCalendar();
     } else {
       authBanner.classList.add("visible");
       authIndicator.className = "no";
@@ -618,6 +619,24 @@ async function checkAuth() {
       } else {
         setStatus("Connect your Google Calendar above before building a schedule.");
       }
+    }
+  } catch (_) {}
+}
+
+// ── Current calendar preload ──────────────────────────────────────────────
+// Show the user's existing Google Calendar events on the grid immediately,
+// before any schedule has been proposed.
+async function loadCalendar() {
+  try {
+    const res = await fetch("/api/calendar");
+    if (!res.ok) return;
+    const data = await res.json();
+    // A schedule proposal may have landed while this request was in flight —
+    // it already contains the hard blocks, so don't clobber it.
+    if (sessionId) return;
+    if (data.schedule && data.schedule.length) {
+      setSchedule(data.schedule, data.week_start, data.day_dates);
+      setStatus("Showing your current calendar — enter goals to build your week around it.");
     }
   } catch (_) {}
 }

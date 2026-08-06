@@ -96,6 +96,42 @@ def test_cross_user_session_is_404(webapp):
     assert client.get("/api/schedule/sess-a").status_code == 200
 
 
+# ── Current-calendar preload ───────────────────────────────────────────────
+
+def test_calendar_requires_cookie(webapp):
+    client = TestClient(webapp.app)
+    assert client.get("/api/calendar").status_code == 401
+
+
+def test_calendar_maps_events_to_hard_blocks(webapp, monkeypatch):
+    import scheduler.data.providers.calendar_provider as provider
+    monkeypatch.setattr(provider, "fetch_hard_events", lambda user=None, calendar_id=None: [
+        {"day": "Monday", "start_hour": 9.0, "end_hour": 10.5,
+         "label": "Standup", "type": "meeting"},
+    ])
+    client = TestClient(webapp.app)
+    _login(webapp, client, "a@x.com")
+    data = client.get("/api/calendar").json()
+    assert data["synced"] is True
+    assert data["schedule"] == [{
+        "day": "Monday", "start_hour": 9.0, "end_hour": 10.5,
+        "label": "Standup", "category": "hard_block", "reasons": [],
+    }]
+    assert data["week_start"] and "Monday" in data["day_dates"]
+
+
+def test_calendar_unsynced_on_provider_failure(webapp, monkeypatch):
+    import scheduler.data.providers.calendar_provider as provider
+    def boom(user=None, calendar_id=None):
+        raise RuntimeError("not_authorized")
+    monkeypatch.setattr(provider, "fetch_hard_events", boom)
+    client = TestClient(webapp.app)
+    _login(webapp, client, "a@x.com")
+    data = client.get("/api/calendar").json()
+    assert data == {"schedule": [], "week_start": data["week_start"],
+                    "day_dates": data["day_dates"], "synced": False}
+
+
 # ── Allowlist ──────────────────────────────────────────────────────────────
 
 def test_allowlist(webapp, monkeypatch):
