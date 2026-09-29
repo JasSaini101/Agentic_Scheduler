@@ -50,8 +50,21 @@ def _ph(sql: str) -> str:
     return sql.replace("?", "%s") if _is_postgres() else sql
 
 
+_initialized = False
+
+
+def ensure_init() -> None:
+    """Create tables once, lazily. Lets the app survive a database that was
+    unreachable at startup — the first request that needs it initializes."""
+    global _initialized
+    if _initialized:
+        return
+    init()
+
+
 def init() -> None:
     """Create tables if they don't exist. Safe to call on every startup."""
+    global _initialized
     with _connect() as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tokens ("
@@ -70,11 +83,13 @@ def init() -> None:
             "  updated_at DOUBLE PRECISION NOT NULL)"
         )
         conn.commit()
+    _initialized = True
 
 
 # ── Tokens ─────────────────────────────────────────────────────────────────
 
 def save_token(user_email: str, token_json: str) -> None:
+    ensure_init()
     with _connect() as conn:
         conn.execute(
             _ph(
@@ -89,6 +104,7 @@ def save_token(user_email: str, token_json: str) -> None:
 
 
 def load_token(user_email: str) -> str | None:
+    ensure_init()
     with _connect() as conn:
         row = conn.execute(
             _ph("SELECT token_json FROM tokens WHERE user_email = ?"),
@@ -98,6 +114,7 @@ def load_token(user_email: str) -> str | None:
 
 
 def delete_token(user_email: str) -> None:
+    ensure_init()
     with _connect() as conn:
         conn.execute(_ph("DELETE FROM tokens WHERE user_email = ?"), (user_email,))
         conn.commit()
@@ -113,6 +130,7 @@ def save_session(
     confirmed: bool,
     constraints: dict | None,
 ) -> None:
+    ensure_init()
     with _connect() as conn:
         conn.execute(
             _ph(
@@ -141,6 +159,7 @@ def save_session(
 
 def load_session(session_id: str) -> dict | None:
     """Return {user_email, schedule, config, confirmed, constraints} or None."""
+    ensure_init()
     with _connect() as conn:
         row = conn.execute(
             _ph(

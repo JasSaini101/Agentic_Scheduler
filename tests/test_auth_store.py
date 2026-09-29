@@ -132,6 +132,65 @@ def test_calendar_unsynced_on_provider_failure(webapp, monkeypatch):
                     "day_dates": data["day_dates"], "synced": False}
 
 
+# ── OAuth CSRF ─────────────────────────────────────────────────────────────
+
+def test_oauth_start_sets_csrf_cookie(webapp, monkeypatch):
+    """The redirect to Google must mirror the state's csrf half in a cookie."""
+    monkeypatch.setattr(webapp, "credentials_config", lambda: {"web": {
+        "client_id": "id", "client_secret": "secret",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }})
+    client = TestClient(webapp.app)
+    res = client.get("/auth/google", follow_redirects=False)
+    assert res.status_code in (302, 307)
+    assert webapp._CSRF_COOKIE in res.cookies
+    # the cookie value is the csrf half of the state in the Google URL
+    from urllib.parse import urlparse, parse_qs
+    state = parse_qs(urlparse(res.headers["location"]).query)["state"][0]
+    assert state.partition(".")[2] == res.cookies[webapp._CSRF_COOKIE]
+
+
+def test_callback_rejects_mismatched_csrf(webapp, monkeypatch):
+    """A callback from someone else's OAuth flow must not sign this browser in."""
+    def explode():
+        raise AssertionError("credentials_config must not be reached on CSRF failure")
+    monkeypatch.setattr(webapp, "credentials_config", explode)
+
+    client = TestClient(webapp.app)
+    client.cookies.set(webapp._CSRF_COOKIE, "the-real-token")
+    res = client.get("/auth/callback?code=stolen&state=verifier.attacker-token",
+                     follow_redirects=False)
+    assert res.status_code in (302, 307)
+    assert res.headers["location"] == "/?denied=1"
+    assert store.load_token("a@x.com") is None
+
+
+def test_callback_rejects_missing_csrf_cookie(webapp, monkeypatch):
+    monkeypatch.setattr(webapp, "credentials_config",
+                        lambda: (_ for _ in ()).throw(AssertionError("unreachable")))
+    client = TestClient(webapp.app)
+    res = client.get("/auth/callback?code=x&state=verifier.token",
+                     follow_redirects=False)
+    assert res.headers["location"] == "/?denied=1"
+
+
+# ── Lazy init ──────────────────────────────────────────────────────────────
+
+def test_ensure_init_is_idempotent_and_preserves_rows():
+    store.save_token("a@x.com", "TOKEN")
+    store.ensure_init()
+    store.ensure_init()
+    assert store.load_token("a@x.com") == "TOKEN"
+
+
+def test_store_recovers_if_init_never_ran(monkeypatch):
+    """A database down at startup must self-heal on first use."""
+    monkeypatch.setattr(store, "_initialized", False)
+    store.save_token("late@x.com", "TOKEN")
+    assert store.load_token("late@x.com") == "TOKEN"
+
+
 # ── Allowlist ──────────────────────────────────────────────────────────────
 
 def test_allowlist(webapp, monkeypatch):
