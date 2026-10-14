@@ -11,6 +11,7 @@ import base64
 import logging
 import secrets as _secrets
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Ensure project root is on the path
@@ -37,8 +38,19 @@ from scheduler.data.providers.google_auth import SCOPES, credentials_config, sav
 logger = logging.getLogger("agentic_scheduler")
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Agentic Scheduler")
-store.init()
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Create tables if the database is reachable. A database that is briefly
+    down at boot must not crash-loop the service — store.ensure_init() retries
+    on the first request that actually needs it."""
+    try:
+        store.init()
+    except Exception as exc:
+        logger.warning("Store init deferred (database unreachable at startup): %s", exc)
+    yield
+
+
+app = FastAPI(title="Agentic Scheduler", lifespan=_lifespan)
 
 
 @app.middleware("http")
@@ -90,6 +102,8 @@ def _check_rate_limit(request: Request) -> None:
 
 _COOKIE_NAME = "scheduler_user"
 _COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
+_CSRF_COOKIE = "scheduler_oauth_csrf"
+_CSRF_MAX_AGE = 600  # an OAuth round trip should take well under 10 minutes
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -124,6 +138,19 @@ def _set_user_cookie(response: Response, email: str) -> None:
         _COOKIE_NAME,
         _serializer().dumps(email),
         max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=_base_url().startswith("https"),
+        samesite="lax",
+    )
+
+
+def _set_csrf_cookie(response: Response, csrf: str) -> None:
+    """Remember the CSRF token we put in the OAuth state, so the callback can
+    prove the flow was started by this browser."""
+    response.set_cookie(
+        _CSRF_COOKIE,
+        csrf,
+        max_age=_CSRF_MAX_AGE,
         httponly=True,
         secure=_base_url().startswith("https"),
         samesite="lax",
@@ -252,6 +279,8 @@ def auth_google():
     code_verifier, code_challenge = _pkce_pair()
     # Embed verifier in state so it survives the redirect without server storage.
     # token_urlsafe chars are [A-Za-z0-9_-] — no '.' — making '.' a safe separator.
+    # The csrf half is mirrored in a cookie and checked in the callback, so a
+    # flow started in someone else's browser can't sign this browser in.
     csrf = _secrets.token_urlsafe(16)
     composite_state = f"{code_verifier}.{csrf}"
     auth_url, _ = flow.authorization_url(
@@ -262,14 +291,28 @@ def auth_google():
         code_challenge=code_challenge,
         code_challenge_method="S256",
     )
-    return RedirectResponse(auth_url)
+    response = RedirectResponse(auth_url)
+    _set_csrf_cookie(response, csrf)
+    return response
 
 
 @app.get("/auth/callback")
-def auth_callback(code: str, state: str = ""):
+def auth_callback(request: Request, code: str, state: str = ""):
     """Exchange the code for tokens, identify the user, persist per-user."""
-    # Extract verifier from composite state "<verifier>.<csrf>"
-    code_verifier = state.split(".", 1)[0] if state and "." in state else None
+    # Split the composite state "<verifier>.<csrf>"
+    code_verifier, _, state_csrf = state.partition(".") if state else ("", "", "")
+    code_verifier = code_verifier or None
+
+    # CSRF: the state's csrf must match the cookie set when this browser
+    # started the flow. Without this an attacker could hand someone a callback
+    # URL from their own flow and sign that person into the attacker's account.
+    cookie_csrf = request.cookies.get(_CSRF_COOKIE, "")
+    if not state_csrf or not cookie_csrf or not _secrets.compare_digest(state_csrf, cookie_csrf):
+        logger.warning("OAuth callback rejected: CSRF state mismatch")
+        response = RedirectResponse("/?denied=1")
+        response.delete_cookie(_CSRF_COOKIE)
+        return response
+
     try:
         client_config = credentials_config()
     except RuntimeError as e:
@@ -294,12 +337,15 @@ def auth_callback(code: str, state: str = ""):
 
     if not _allowed(email):
         logger.info("Sign-in rejected (not on allowlist): %s", email)
-        return RedirectResponse("/?denied=1")
+        response = RedirectResponse("/?denied=1")
+        response.delete_cookie(_CSRF_COOKIE)
+        return response
 
     save_token(email, flow.credentials.to_json())
 
     response = RedirectResponse("/?authorized=1")
     _set_user_cookie(response, email)
+    response.delete_cookie(_CSRF_COOKIE)
     return response
 
 
